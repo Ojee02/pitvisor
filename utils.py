@@ -313,6 +313,8 @@ def get_d_standings(yr):
     collection_name = "drivers_standings"
     collection = db[collection_name]
     doc = collection.find_one({"year": int(yr)})
+    if doc is None:
+        raise Exception(f"No drivers standings data available for {yr}")
     file = doc["file"]
     with open(dir_path + get_path() + "res" + get_path() + "output" + get_path() + f"{yr}_DRIVERS_STANDINGS" + ".png", 'wb') as f:
         f.write(file)
@@ -323,6 +325,8 @@ def get_c_standings(yr):
     collection_name = "constructors_standings"
     collection = db[collection_name]
     doc = collection.find_one({"year": int(yr)})
+    if doc is None:
+        raise Exception(f"No constructors standings data available for {yr}")
     file = doc["file"]
     with open(dir_path + get_path() + "res" + get_path() + "output" + get_path() + f"{yr}_CONSTRUCTORS_STANDINGS" + ".png", 'wb') as f:
         f.write(file)
@@ -333,6 +337,8 @@ def get_p(yr):
     collection_name = "points"
     collection = db[collection_name]
     doc = collection.find_one({"year": int(yr)})
+    if doc is None:
+        raise Exception(f"No points data available for {yr}")
     file = doc["file"]
     with open(dir_path + get_path() + "res" + get_path() + "output" + get_path() + f"{yr}_POINTS" + ".png", 'wb') as f:
         f.write(file)
