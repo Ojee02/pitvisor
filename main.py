@@ -284,23 +284,18 @@ async def main_helper(request):
         input_list = data.get('input_list')
         user_id = data.get('user_id')
         datetime = get_datetime()
+        output_path = dir_path + get_path() + "res" + get_path() + "output" + get_path()
         res = await command(user_id, input_list, func_name.lower(), datetime)
-        with open("res/output/" + res, "rb") as image:
+        with open(output_path + res + ".png", "rb") as image:
             f = image.read()
             b = bytearray(f)
         result = list(b)
-        os.remove("res/output/" + res)
-        res = await command(user_id, input_list, func_name.lower(), datetime)
-        with open("res/output/" + res, "rb") as image:
-            f = image.read()
-            b = bytearray(f)
-        result = list(b)
-        os.remove("res/output/" + res)
+        os.remove(output_path + res + ".png")
         try:
             log(user_id, func_name, input_list, "", False, datetime)
         except:
             pass
-        return jsonify({'result': result, 'datetime': datetime}), 200    
+        return jsonify({'result': result, 'datetime': datetime}), 200
     except Exception as exc:
         return jsonify({'error': str(exc)}), 400
 
@@ -371,6 +366,9 @@ def inputs():
 
 # run the server
 def run():
+    # ensure output directory exists
+    output_dir = dir_path + get_path() + "res" + get_path() + "output"
+    os.makedirs(output_dir, exist_ok=True)
     try:
         delete_all()
     except:
