@@ -37,4 +37,5 @@ If you want to support the development of Blue F1ag, you can sponsor me on GitHu
 
 # Status
 
-<img alt='status' title='Status' src='https://custom-icon-badges.demolab.com/badge/-server%20status:%20OFFLINE-aa0000?style=for-the-badge&logo=server&logoColor=white'/>
+<!-- <img alt='status' title='Status' src='https://custom-icon-badges.demolab.com/badge/-server%20status:%20OFFLINE-aa0000?style=for-the-badge&logo=server&logoColor=white'/> -->
+<img alt='status' title='Status' src='https://custom-icon-badges.demolab.com/badge/-server%20status:%20ONLINE-00aa00?style=for-the-badge&logo=server&logoColor=white'/>
