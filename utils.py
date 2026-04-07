@@ -216,34 +216,58 @@ def get_drivers_from_db(yr, rc, sn):
             return []
     # Try DB first
     collection = db["data"]
-    doc = collection.find_one({"year": int(yr), "race": rc, "session": sn.capitalize()})
+    sn_cap = sn.capitalize() if sn else sn
+    doc = collection.find_one({"year": int(yr), "race": rc, "session": sn_cap})
     if doc and "drivers" in doc:
         return doc["drivers"]
-    # Fallback to live FastF1
-    return get_drivers(yr, rc, sn)
+    # Fallback to live FastF1, then cache
+    drivers = get_drivers(yr, rc, sn)
+    if drivers:
+        _cache_session_data(yr, rc, sn_cap, drivers=drivers)
+    return drivers
 
 def get_laps_from_db(yr, rc, sn):
     if rc is None and sn is None:
         return []
-    # Try DB first
     collection = db["data"]
-    doc = collection.find_one({"year": int(yr), "race": rc, "session": sn.capitalize()})
+    sn_cap = sn.capitalize() if sn else sn
+    doc = collection.find_one({"year": int(yr), "race": rc, "session": sn_cap})
     if doc and "laps" in doc:
         return doc["laps"]
-    # Fallback to live FastF1
-    return get_laps(yr, rc, sn)
+    laps = get_laps(yr, rc, sn)
+    if laps:
+        _cache_session_data(yr, rc, sn_cap, laps=laps)
+    return laps
 
 def get_distance_from_db(yr, rc, sn):
     if rc is None and sn is None:
         return []
-    # Try DB first
     collection = db["data"]
-    doc = collection.find_one({"year": int(yr), "race": rc, "session": sn.capitalize()})
+    sn_cap = sn.capitalize() if sn else sn
+    doc = collection.find_one({"year": int(yr), "race": rc, "session": sn_cap})
     if doc and "distance" in doc:
         return doc["distance"]
-    # Fallback to live FastF1
-    return get_distance(yr, rc, sn)
-    
+    dist = get_distance(yr, rc, sn)
+    if dist:
+        _cache_session_data(yr, rc, sn_cap, distance=dist)
+    return dist
+
+def _cache_session_data(yr, rc, sn, drivers=None, laps=None, distance=None):
+    """Upsert session data into the DB so subsequent lookups are instant."""
+    try:
+        collection = db["data"]
+        doc = collection.find_one({"year": int(yr), "race": rc, "session": sn})
+        update = {}
+        if drivers is not None: update["drivers"] = drivers
+        if laps is not None: update["laps"] = laps
+        if distance is not None: update["distance"] = distance
+        if doc:
+            collection.update_one({"year": int(yr), "race": rc, "session": sn}, {"$set": update})
+        else:
+            collection.insert_one({"year": int(yr), "race": rc, "session": sn, **update})
+    except Exception:
+        pass
+
 def upload_drivers_standings(year, file):
     with open(file, 'rb') as f:
         file_data = f.read()
