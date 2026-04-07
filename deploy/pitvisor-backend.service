@@ -1,0 +1,20 @@
+[Unit]
+Description=Pitvisor Backend (Flask/Gunicorn)
+After=network.target
+
+[Service]
+User=disinteg
+Group=disinteg
+WorkingDirectory=/home/disinteg/pitvisor/backend
+Environment="PATH=/home/disinteg/pitvisor/venv/bin"
+ExecStart=/home/disinteg/pitvisor/venv/bin/gunicorn --workers 1 --threads 4 --timeout 900 --bind 127.0.0.1:5100 main:app
+Restart=always
+RestartSec=5
+
+# Resource limits to coexist with MC server
+CPUQuota=60%
+MemoryMax=4G
+MemoryHigh=3G
+
+[Install]
+WantedBy=multi-user.target

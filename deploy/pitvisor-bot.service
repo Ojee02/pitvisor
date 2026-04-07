@@ -1,0 +1,19 @@
+[Unit]
+Description=Pitvisor Discord Bot
+After=network.target pitvisor-backend.service
+
+[Service]
+User=disinteg
+Group=disinteg
+WorkingDirectory=/home/disinteg/pitvisor/bot
+Environment="PATH=/home/disinteg/pitvisor/venv/bin"
+ExecStart=/home/disinteg/pitvisor/venv/bin/python main.py
+Restart=always
+RestartSec=5
+
+# Resource limits
+CPUQuota=20%
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
