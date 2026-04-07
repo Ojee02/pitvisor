@@ -184,13 +184,7 @@ def get_races_from_db(func, yr):
     return res
 
 def get_sessions_from_db(yr, rc):
-    # Try DB first
-    collection = db["data"]
-    docs = collection.find({"year": int(yr), "race": rc})
-    res = [doc["session"] for doc in docs]
-    if res:
-        return res
-    # Fallback to FastF1
+    # Always return full session list from FastF1
     return get_sessions(yr, rc)
 
 def get_drivers_from_db(yr, rc, sn):
