@@ -120,6 +120,29 @@ def make_img(datetime, text):
 # set mpl font
 set_font()
 
+def plot_corners(ax, session):
+    """Annotate corner numbers on a track map axis."""
+    try:
+        ci = session.get_circuit_info()
+        if ci is None or ci.corners is None or ci.corners.empty:
+            return
+        for _, corner in ci.corners.iterrows():
+            x, y = corner['X'], corner['Y']
+            num = str(int(corner['Number']))
+            letter = corner.get('Letter', '')
+            if letter and str(letter) != 'nan':
+                num += str(letter)
+            # offset label using corner angle
+            angle_rad = np.radians(corner['Angle'])
+            offset = 300
+            tx = x + np.cos(angle_rad) * offset
+            ty = y + np.sin(angle_rad) * offset
+            ax.text(tx, ty, num, fontsize=7, color='white', ha='center', va='center',
+                    fontweight='bold', alpha=0.7,
+                    bbox=dict(boxstyle='round,pad=0.15', facecolor='black', edgecolor='none', alpha=0.5))
+    except Exception:
+        pass
+
 ### END OF GENERAL FUNCTIONS ###
 
 
@@ -642,8 +665,10 @@ def gear_func(input_list, datetime):
     cbar.set_ticks(np.arange(1.5, 9.5))
     cbar.set_ticklabels(np.arange(1, 9))
 
+    plot_corners(plt.gca(), session)
+
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
-    
+
     rstall(plt)
     mpl_lock.release()
     return "success"
@@ -735,8 +760,10 @@ def speed_func(input_list, datetime):
     legend = mpl.colorbar.ColorbarBase(
         cbaxes, norm=normlegend, cmap=colormap, orientation="horizontal")
 
+    plot_corners(ax, session)
+
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
-    
+
     rstall(plt)
     mpl_lock.release()
     return "success"
@@ -1323,6 +1350,7 @@ def tires_func(input_list, datetime):
             f"{yr} {rc} {sn}\n Lap {sl} - Tire Comparison")
 
     generate_minisector_plot(sl, sn)
+    plot_corners(plt.gca(), session)
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
@@ -1585,8 +1613,10 @@ def sectors_func(input_list, datetime):
     plt.suptitle(f"{yr} {rc} {sn} - Fastest Sectors\n" +
                  d1 + " (" + lap1 + ") vs " + d2 + " (" + lap2 + ")", size=25)
 
+    plot_corners(plt.gca(), session)
+
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
-    
+
     rstall(plt)
     mpl_lock.release()
     return "success"
