@@ -1321,21 +1321,25 @@ def tires_func(input_list, datetime):
                   == "WET", 'Fastest_compound_int'] = 2
 
     def generate_minisector_plot(lap, sn):
+        # Get clean telemetry from fastest lap for smooth X,Y path
+        clean_tel = session.laps.pick_fastest().get_telemetry().add_distance()
+        clean_tel['Minisector'] = np.searchsorted(
+            np.array([0] + [total_distance / num_minisectors * (i + 1) for i in range(num_minisectors - 1)]),
+            clean_tel['Distance'].values, side='right')
+
+        # Map fastest compound per minisector from the analysis
         single_lap = telemetry.loc[telemetry['Lap'] == lap]
+        if 'Driver' in single_lap.columns:
+            single_lap = single_lap.loc[single_lap['Driver'] == single_lap['Driver'].iloc[0]]
+        compound_map = single_lap.groupby('Minisector')['Fastest_compound_int'].first().to_dict()
+        clean_tel['Fastest_compound_int'] = clean_tel['Minisector'].map(compound_map).fillna(3).astype(float)
 
-        # Use only one driver's X,Y for the track outline to avoid cross-driver artifacts
-        first_driver = single_lap['Driver'].iloc[0] if 'Driver' in single_lap.columns else None
-        if first_driver:
-            track_data = single_lap.loc[single_lap['Driver'] == first_driver]
-        else:
-            track_data = single_lap
-
-        x = np.array(track_data['X'].values)
-        y = np.array(track_data['Y'].values)
+        x = np.array(clean_tel['X'].values)
+        y = np.array(clean_tel['Y'].values)
 
         points = np.array([x, y]).T.reshape(-1, 1, 2)
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
-        compound = track_data['Fastest_compound_int'].to_numpy().astype(float)
+        compound = clean_tel['Fastest_compound_int'].to_numpy().astype(float)
 
         cmap = cm.get_cmap('ocean', 3)
         lc_comp = LineCollection(
