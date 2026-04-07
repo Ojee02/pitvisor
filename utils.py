@@ -172,87 +172,69 @@ def get_distance(yr, rc, sn):
 ### db ###
 
 def get_races_from_db(func, yr):
-    if func.lower() == "event":
-        collection_name = "races"
-        collection = db[collection_name]
-        
-        doc = collection.find_one({"year": int(yr)})
-        races = doc["races"]
-        
-        res = []
-        for race in races:
-            if race not in res:
-                res.append(race)    
-    else:
-        collection_name = "data"
-        collection = db[collection_name]
-        docs = collection.find({"year": int(yr)})
-        
-        records = []
-        for doc in docs:
-            records.append(doc["race"])
-        
-        res = []
-        all_races = get_races(yr)
-        for race in all_races:
-            if race in records and race not in res:
-                res.append(race)
+    collection = db["races"]
+    doc = collection.find_one({"year": int(yr)})
+    if doc is None:
+        return []
+    races = doc["races"]
+    res = []
+    for race in races:
+        if race not in res:
+            res.append(race)
     return res
 
 def get_sessions_from_db(yr, rc):
-    collection_name = "data"
-    collection = db[collection_name]
-    
+    # Try DB first
+    collection = db["data"]
     docs = collection.find({"year": int(yr), "race": rc})
-    res = []
-    for doc in docs:
-        res.append(doc["session"])
-
-    if int(yr) <= 2018:
-        res = ['Practice 1', 'Practice 2', 'Practice 3', 'Qualifying', 'Race']
-    return res
+    res = [doc["session"] for doc in docs]
+    if res:
+        return res
+    # Fallback to FastF1
+    return get_sessions(yr, rc)
 
 def get_drivers_from_db(yr, rc, sn):
-    if rc == None and sn == None:
-        collection_name = "data"
-        collection = db[collection_name]
+    if rc is None and sn is None:
+        # All drivers for the year — try DB, fallback to empty
+        collection = db["data"]
         docs = collection.find({"year": int(yr)})
         drivers = []
         for doc in docs:
-            temp = doc["drivers"]
-            for driver in temp:
+            for driver in doc.get("drivers", []):
                 if driver not in drivers:
                     drivers.append(driver)
-        return drivers
-    else:
-        collection_name = "data"
-        collection = db[collection_name]
-        sn = sn.capitalize()
-        doc = collection.find_one({"year": int(yr), "race": rc, "session": sn})
-        drivers = doc["drivers"]
-        return drivers
+        if drivers:
+            return drivers
+        return []
+    # Try DB first
+    collection = db["data"]
+    doc = collection.find_one({"year": int(yr), "race": rc, "session": sn.capitalize()})
+    if doc and "drivers" in doc:
+        return doc["drivers"]
+    # Fallback to live FastF1
+    return get_drivers(yr, rc, sn)
 
 def get_laps_from_db(yr, rc, sn):
-    if rc == None and sn == None:
+    if rc is None and sn is None:
         return []
-    else:
-        collection_name = "data"
-        collection = db[collection_name]
-        sn = sn.capitalize()
-        doc = collection.find_one({"year": int(yr), "race": rc, "session": sn})
-        laps = doc["laps"]
-        return laps
+    # Try DB first
+    collection = db["data"]
+    doc = collection.find_one({"year": int(yr), "race": rc, "session": sn.capitalize()})
+    if doc and "laps" in doc:
+        return doc["laps"]
+    # Fallback to live FastF1
+    return get_laps(yr, rc, sn)
 
 def get_distance_from_db(yr, rc, sn):
-    if rc == None and sn == None:
+    if rc is None and sn is None:
         return []
-    else:
-        collection_name = "data"
-        collection = db[collection_name]
-        sn = sn.capitalize()
-        doc = collection.find_one({"year": int(yr), "race": rc, "session": sn})
-        dist = doc["distance"]
-        return dist
+    # Try DB first
+    collection = db["data"]
+    doc = collection.find_one({"year": int(yr), "race": rc, "session": sn.capitalize()})
+    if doc and "distance" in doc:
+        return doc["distance"]
+    # Fallback to live FastF1
+    return get_distance(yr, rc, sn)
     
 def upload_drivers_standings(year, file):
     with open(file, 'rb') as f:
