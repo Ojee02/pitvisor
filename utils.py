@@ -34,13 +34,9 @@ def get_datetime():
 # get parth of file
 dir_path = r"" + str(pathlib.Path(__file__).parent.resolve())
 
-# get path for os
+# get path separator for os
 def get_path():
-    if platform.system().__contains__("Win"):
-        path = "\\"
-    elif platform.system().__contains__("Lin"):
-        path = "/"
-    return path
+    return os.sep
 
 # load the session
 def get_sess(yr, rc, sn):
@@ -65,11 +61,8 @@ def get_sess(yr, rc, sn):
             session_type = "1"
         elif rc == "Pre-Season Test":
             session_type = "2"
-    elif yr == 2023:
-        if rc == "Pre-Season Testing":
-            session_type = "1"
-    elif yr == 2024:
-        if rc == "Pre-Season Testing":
+    elif yr >= 2023:
+        if "Pre-Season" in str(rc):
             session_type = "1"
             
     if session_type == "1" or session_type == "2":

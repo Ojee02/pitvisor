@@ -1,11 +1,8 @@
 import asyncio
-from flask import Flask
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-from flask_sslify import SSLify
-from threading import Thread
 import os
 from dotenv import load_dotenv
-from flask import jsonify, request
 import fastf1
 import fastf1.plotting
 import pandas as pd
@@ -24,8 +21,8 @@ load_dotenv()
 FUNCS = os.getenv("FUNCS")
 
 from funcs import *
+from data_funcs import DATA_FUNCS
 
-HTTPS = os.getenv("HTTPS")
 
 IDS = os.getenv("IDS")
 PY = os.getenv("PY")
@@ -164,19 +161,43 @@ def fix_exc(exc, input_list, comm):
         
     return exc
 
+# command dispatch table
+COMMAND_FUNCS = {
+    "fastest": fastest_func,
+    "results": results_func,
+    "schedule": schedule_func,
+    "event": event_func,
+    "laps": laps_func,
+    "time": time_func,
+    "distance": distance_func,
+    "delta": delta_func,
+    "gear": gear_func,
+    "speed": speed_func,
+    "telemetry": tel_func,
+    "cornering": cornering_func,
+    "tires": tires_func,
+    "strategy": strategy_func,
+    "sectors": sectors_func,
+    "racetrace": rt_func,
+    "positions": positions_func,
+    "battles": battles_func,
+    "track": track_func,
+    "driverstats": driver_stats_func,
+}
+
 # command
 async def command(user_id, input_list, comm, datetime):
-  
-    try:
+    res = None
+    inputs = ""
+    message = ""
 
-        inputs = ""
-        message = ""
+    try:
         for i in input_list:
             inputs += i + " " + str(input_list[i]) + " "
         message = comm + " " + inputs
-        
+
         print("STARTED " + message + " " + datetime)
-        
+
         if comm == "drivers":
             res = get_d_standings(input_list["year"])
             return res
@@ -186,81 +207,49 @@ async def command(user_id, input_list, comm, datetime):
         elif comm == "points":
             res = get_p(input_list["year"])
             return res
-        else:
-            if comm == "fastest":
-                res = fastest_func(input_list, datetime)
-            elif comm == "results":
-                res = results_func(input_list, datetime)
-            elif comm == "schedule":
-                res = schedule_func(input_list, datetime)
-            elif comm == "event":
-                res = event_func(input_list, datetime)
-            elif comm == "laps":
-                res = laps_func(input_list, datetime)
-            elif comm == "time":
-                res = time_func(input_list, datetime)
-            elif comm == "distance":
-                res = distance_func(input_list, datetime)
-            elif comm == "delta":
-                res = delta_func(input_list, datetime)
-            elif comm == "gear":
-                res = gear_func(input_list, datetime)
-            elif comm == "speed":
-                res = speed_func(input_list, datetime)
-            elif comm == "telemetry":
-                res = tel_func(input_list, datetime)
-            elif comm == "cornering":
-                res = cornering_func(input_list, datetime)
-            elif comm == "tires":
-                res = tires_func(input_list, datetime)
-            elif comm == "strategy":
-                res = strategy_func(input_list, datetime)
-            elif comm == "sectors":
-                res = sectors_func(input_list, datetime)
-            elif comm == "racetrace":
-                res = rt_func(input_list, datetime)
-            elif comm == "positions":
-                res = positions_func(input_list, datetime)
-            elif comm == "battles":
-                res = battles_func(input_list, datetime)
-            
-        if res !="success" or res == None:
+
+        func = COMMAND_FUNCS.get(comm)
+        if func is None:
+            raise Exception(f"Unknown command: {comm}")
+
+        res = func(input_list, datetime)
+
+        if res != "success":
             raise Exception("Internal Server Error. Please try again.")
-        else:
-            print("FINISHED " + message + " " + datetime)
-                
-            exc = ""
-            flag = False
-    
-    except Exception as exc:
-        
-        exc = str(exc)
+
+        print("FINISHED " + message + " " + datetime)
+        exc = ""
+        flag = False
+
+    except Exception as e:
+        exc = str(e)
         flag = True
-        
-        if datetime in queue:
-            queue.remove(datetime)
-        
+
+        if mpl_lock.locked():
+            try:
+                mpl_lock.release()
+            except RuntimeError:
+                pass
+
         print("FAILED " + message + " " + datetime + " ")
         print(traceback.format_exc())
-            
+
         exc = fix_exc(exc, input_list, comm)
-        
+
         raise Exception(exc)
 
     try:
-        log(user_id, message, exc, flag, datetime)
-    except:
+        log(user_id, comm, message, exc, flag, datetime)
+    except Exception:
         pass
     return datetime
 
 # flask server
 app = Flask('', static_folder='res')
 CORS(app)
-if HTTPS == "true":
-    sslify = SSLify(app)
 
 async def update_helper():
-    yr = dt.datetime.now().year
+    yr = dt.now().year
     stnd = ""
     races = ""
     data = ""
@@ -291,10 +280,6 @@ async def main_helper(request):
             b = bytearray(f)
         result = list(b)
         os.remove(output_path + res + ".png")
-        try:
-            log(user_id, func_name, input_list, "", False, datetime)
-        except:
-            pass
         return jsonify({'result': result, 'datetime': datetime}), 200
     except Exception as exc:
         return jsonify({'error': str(exc)}), 400
@@ -355,6 +340,23 @@ def home():
     else:
         return "Backend is running."
 
+# data API - returns JSON instead of images
+@app.route('/data', methods=['POST'])
+def data():
+    try:
+        req = request.get_json()
+        func_name = req.get('func_name', '').lower()
+        input_list = req.get('input_list', {})
+
+        func = DATA_FUNCS.get(func_name)
+        if func is None:
+            return jsonify({'error': f'Unknown data function: {func_name}'}), 400
+
+        result = func(input_list)
+        return jsonify(result), 200
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 400
+
 # get inputs
 @app.route('/inputs', methods=['GET', 'POST'])
 def inputs():
@@ -364,24 +366,13 @@ def inputs():
         except Exception as exc:
             return jsonify({'error': str(exc)}), 400
 
-# run the server
-def run():
-    # ensure output directory exists
-    output_dir = dir_path + get_path() + "res" + get_path() + "output"
-    os.makedirs(output_dir, exist_ok=True)
-    try:
-        delete_all()
-    except:
-        pass
-    if HTTPS == "true":
-        app.run(ssl_context=('cert/fullchain.pem', 'cert/privkey.pem'), host='0.0.0.0',port=5000)
-    else:
-        app.run(host='0.0.0.0',port=5000)
+# ensure output directory exists on startup
+output_dir = dir_path + get_path() + "res" + get_path() + "output"
+os.makedirs(output_dir, exist_ok=True)
+try:
+    delete_all()
+except:
+    pass
 
-# keep the server running
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-# keep the server running
-keep_alive()
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

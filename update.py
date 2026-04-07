@@ -15,8 +15,10 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 import traceback
 from utils import *
-if os.name == 'nt':
+try:
     from fastf1.ergast import Ergast
+except ImportError:
+    Ergast = None
 
 load_dotenv()
 
@@ -120,7 +122,7 @@ def driver_func(yr):
                 driver_point_mapping[driver] = points
 
             # Append the current round to our fial dataframe
-            all_championship_standings = all_championship_standings._append(current_round, ignore_index=True)
+            all_championship_standings = pd.concat([all_championship_standings, pd.DataFrame([current_round])], ignore_index=True)
         except Exception as exc:
             print(traceback.format_exc())
             break
@@ -309,7 +311,7 @@ def const_func(yr):
 
 
             # Append the current round to our fial dataframe
-            all_championship_standings = all_championship_standings._append(current_round, ignore_index=True)
+            all_championship_standings = pd.concat([all_championship_standings, pd.DataFrame([current_round])], ignore_index=True)
         except:
             break
         
@@ -418,9 +420,9 @@ def const_func(yr):
 # get the heatmap of the drivers standings
 def points_func(yr):
     
-    if os.name != 'nt':
-        raise Exception("Function is not available")
-    
+    if Ergast is None:
+        raise Exception("Ergast API not available (fastf1.ergast not installed)")
+
     ergast = Ergast()
     races = ergast.get_race_schedule(yr)
     results = []

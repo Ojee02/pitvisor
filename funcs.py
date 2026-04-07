@@ -3,9 +3,7 @@ import pathlib
 import fastf1
 from fastf1 import plotting
 from fastf1 import utils
-from fastf1 import plotting
 from fastf1.core import Laps
-from matplotlib import pyplot as plt
 import matplotlib.pyplot as plt
 import pandas as pd
 import tabulate
@@ -23,6 +21,7 @@ from matplotlib import dates
 from PIL import Image, ImageDraw, ImageFont
 import warnings
 import platform
+import requests
 from update import *
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -40,18 +39,11 @@ if not os.path.exists(dir_path + get_path() + "res"):
 if not os.path.exists(dir_path + get_path() + "res" + get_path() + "output"):
     os.mkdir(dir_path + get_path() + "res" + get_path() + "output")
 
-queue = []
+import threading
+mpl_lock = threading.Lock()
 
 
 ### GENERAL FUNCTIONS ###
-
-# queue system to run mpl for functions in order
-def wait_for_turn(datetime):
-    if queue[0] == datetime:
-        return
-    else:
-        tm.sleep(1)
-        wait_for_turn(datetime)
 
 # get_datetime helper
 def get_time():
@@ -74,65 +66,11 @@ def set_font():
     fm.fontManager.ttflist.insert(0, fe)  # or append is fine
     mpl.rcParams['font.family'] = fe.name  # = 'your custom ttf font name'
 
-# get path for os
+# get path separator for os
 def get_path():
-    if platform.system().__contains__("Win"):
-        path = "\\"
-    elif platform.system().__contains__("Lin"):
-        path = "/"
-    return path
+    return os.sep
 
-# load the session
-def get_sess(yr, rc, sn):
-    
-    try:
-        rc = int(rc)
-    except:
-        pass
-    
-    session_type = "normal"
-
-    if yr == 2020:
-        if rc == "Pre-Season Test 1":
-            session_type = "1"
-        elif rc == "Pre-Season Test 2":
-            session_type = "2"
-    elif yr == 2021:
-        if rc == "Pre-Season Test":
-            session_type = "1"
-    elif yr == 2022:
-        if rc == "Pre-Season Track Session":
-            session_type = "1"
-        elif rc == "Pre-Season Test":
-            session_type = "2"
-    elif yr == 2023:
-        if rc == "Pre-Season Testing":
-            session_type = "1"
-    elif yr == 2024:
-        if rc == "Pre-Season Testing":
-            session_type = "1"
-            
-    if session_type == "1" or session_type == "2":
-        if sn == "Day 1":
-            sn = 1
-        elif sn == "Day 2":
-            sn = 2
-        elif sn == "Day 3":
-            sn = 3
-            
-    if session_type == "normal":
-        session = fastf1.get_session(yr, rc, sn)
-    elif session_type == "1":
-        session = fastf1.get_testing_session(yr, 1, sn)
-    elif session_type == "2":
-        session = fastf1.get_testing_session(yr, 2, sn)
-        
-    session.load()
-    try:
-        fix = session.laps.pick_fastest()
-    except:
-        pass
-    return session
+# get_sess is imported from utils.py via update.py
 
 # reset mpl
 def rstall(plt):
@@ -144,11 +82,6 @@ def rstall(plt):
     set_font()
 
 # turn text into image
-from PIL import Image, ImageDraw, ImageFont
-import os
-
-def get_path():
-    return os.sep  # cross-platform separator
 
 # Full image generation function
 def make_img(datetime, text):
@@ -201,9 +134,7 @@ def fastest_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
-
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
 
     plotting.setup_mpl()
 
@@ -257,7 +188,7 @@ def fastest_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def results_func(input_list, datetime):
@@ -364,9 +295,10 @@ def laps_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
 
     plotting.setup_mpl()
     fig, ax = plt.subplots()
@@ -405,7 +337,7 @@ def laps_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def time_func(input_list, datetime):
@@ -419,9 +351,10 @@ def time_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
 
     plotting.setup_mpl()
     fig, ax = plt.subplots()
@@ -476,7 +409,7 @@ def time_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def distance_func(input_list, datetime):
@@ -490,9 +423,10 @@ def distance_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
 
     plotting.setup_mpl()
     fig, ax = plt.subplots()
@@ -545,7 +479,7 @@ def distance_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def delta_func(input_list, datetime):
@@ -561,9 +495,10 @@ def delta_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
     
     if (d1 == None or d1 == ''):
         d1 = session.laps.pick_fastest()['Driver']
@@ -632,7 +567,7 @@ def delta_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def gear_func(input_list, datetime):
@@ -646,9 +581,10 @@ def gear_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
     
     rstall(plt)
 
@@ -709,7 +645,7 @@ def gear_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def speed_func(input_list, datetime):
@@ -725,9 +661,10 @@ def speed_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
 
     # weekend = session.event
 
@@ -801,7 +738,7 @@ def speed_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def tel_func(input_list, datetime):
@@ -817,9 +754,10 @@ def tel_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
 
     weekend = session.event
     laps = session.laps
@@ -991,7 +929,7 @@ def tel_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def cornering_func(input_list, datetime):
@@ -1009,9 +947,10 @@ def cornering_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
 
     # Get the laps
     laps = session.laps
@@ -1105,7 +1044,7 @@ def cornering_func(input_list, datetime):
                          'DistanceDelta'] = actions_driver_2.loc[0, 'Distance']
 
     # Merging together
-    all_actions = actions_driver_1._append(actions_driver_2)
+    all_actions = pd.concat([actions_driver_1, actions_driver_2])
 
     # Calculating average speed
     avg_speed_driver_1 = np.mean(telemetry_driver_1['Speed'].loc[
@@ -1235,10 +1174,10 @@ def cornering_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
-def tires_func(input_list, datetime): # very slow
+def tires_func(input_list, datetime):
 
     yr = input_list["year"]
     rc = input_list["race"]
@@ -1248,9 +1187,7 @@ def tires_func(input_list, datetime): # very slow
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
-
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
 
     plotting.setup_mpl()
 
@@ -1260,7 +1197,7 @@ def tires_func(input_list, datetime): # very slow
     # Get the laps
     laps = session.laps
 
-    # Calculate RaceLapNumber (LapNumber minus 1 since the warmup lap is included in LapNumber)
+    # Calculate RaceLapNumber
     laps['RaceLapNumber'] = laps['LapNumber'] - 1
 
     # Starting lap
@@ -1269,20 +1206,37 @@ def tires_func(input_list, datetime): # very slow
     # Get all drivers
     drivers = pd.unique(laps['Driver'])
 
-    telemetry = pd.DataFrame()
+    # OPTIMIZATION: instead of every lap for every driver, sample representative laps
+    # Pick the first lap of each stint (compound change) + every 5th lap per driver
+    telemetry_parts = []
 
-    # Telemetry can only be retrieved driver-by-driver
     for driver in drivers:
         driver_laps = laps.pick_driver(driver)
+        if len(driver_laps) == 0:
+            continue
 
-        # Since we want to compare distances, we need to collect telemetry lap-by-lap to reset the distance
-        for lap in driver_laps.iterlaps():
-            driver_telemetry = lap[1].get_telemetry().add_distance()
-            driver_telemetry['Driver'] = driver
-            driver_telemetry['Lap'] = lap[1]['RaceLapNumber']
-            driver_telemetry['Compound'] = lap[1]['Compound']
+        # Get stint boundaries (where compound changes)
+        prev_compound = None
+        sampled_laps = []
+        for idx, (_, lap_data) in enumerate(driver_laps.iterlaps()):
+            compound = lap_data['Compound']
+            lap_num = lap_data['RaceLapNumber']
+            # Always include: first lap of stint, every 5th lap
+            if compound != prev_compound or idx % 5 == 0:
+                sampled_laps.append(lap_data)
+            prev_compound = compound
 
-            telemetry = telemetry._append(driver_telemetry)
+        for lap_data in sampled_laps:
+            try:
+                driver_telemetry = lap_data.get_telemetry().add_distance()
+                driver_telemetry['Driver'] = driver
+                driver_telemetry['Lap'] = lap_data['RaceLapNumber']
+                driver_telemetry['Compound'] = lap_data['Compound']
+                telemetry_parts.append(driver_telemetry)
+            except Exception:
+                continue
+
+    telemetry = pd.concat(telemetry_parts) if telemetry_parts else pd.DataFrame()
 
     # Only keep required columns
     telemetry = telemetry[['Lap', 'Distance', 'Compound', 'Speed', 'X', 'Y']]
@@ -1305,13 +1259,9 @@ def tires_func(input_list, datetime): # very slow
     for i in range(0, (num_minisectors - 1)):
         minisectors.append(minisector_length * (i + 1))
 
-    # Assign minisector to every row in the telemetry data
-    telemetry['Minisector'] = telemetry['Distance'].apply(
-        lambda z: (
-            minisectors.index(
-                min(minisectors, key=lambda x: abs(x-z)))+1
-        )
-    )
+    # Assign minisector to every row in the telemetry data (vectorized for speed)
+    minisector_arr = np.array(minisectors)
+    telemetry['Minisector'] = np.searchsorted(minisector_arr, telemetry['Distance'].values, side='right')
 
     # Calculate fastest tyre per mini sector
     average_speed = telemetry.groupby(['Lap', 'Minisector', 'Compound'])[
@@ -1376,7 +1326,7 @@ def tires_func(input_list, datetime): # very slow
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def strategy_func(input_list, datetime):
@@ -1389,9 +1339,8 @@ def strategy_func(input_list, datetime):
     race.load()
     laps = race.laps
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
 
     driver_stints = laps[['Driver', 'Stint', 'Compound', 'LapNumber']].groupby(
         ['Driver', 'Stint', 'Compound']
@@ -1469,7 +1418,7 @@ def strategy_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def sectors_func(input_list, datetime):
@@ -1485,9 +1434,10 @@ def sectors_func(input_list, datetime):
     session = get_sess(yr, rc, sn)
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
 
     rstall(plt)
 
@@ -1638,7 +1588,7 @@ def sectors_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def rt_func(input_list, datetime):
@@ -1650,9 +1600,10 @@ def rt_func(input_list, datetime):
     session = get_sess(yr, rc, 'Race')
     session.load()
 
-    queue.append(datetime)
     
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
+    
+    mpl_lock.acquire()
 
     plotting.setup_mpl()
     fig, ax = plt.subplots()
@@ -1710,22 +1661,21 @@ def rt_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def positions_func(input_list, datetime):
 
     yr = input_list["year"]
     rc = input_list["race"]
-    
+    safety_car = input_list.get("safety_car", True)
+
     sn = "Race"
 
     session = get_sess(yr, rc, sn)
     session.load(telemetry=False, weather=False)
 
-    queue.append(datetime)
-
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
 
     plotting.setup_mpl()
     fig, ax = plt.subplots(figsize=(12.0, 6))
@@ -1741,7 +1691,56 @@ def positions_func(input_list, datetime):
 
         ax.plot(drv_laps['LapNumber'], drv_laps['Position'],
                 label=abb, color=color)
-        
+
+    if safety_car:
+        try:
+            rcm = session.race_control_messages
+            sc_on = False
+            vsc_on = False
+            sc_start = None
+            vsc_start = None
+            sc_labeled = False
+            vsc_labeled = False
+
+            for _, msg in rcm.iterrows():
+                status = str(msg.get('Status', '')).upper() if 'Status' in rcm.columns else ''
+                category = str(msg.get('Category', '')).upper() if 'Category' in rcm.columns else ''
+
+                # Find the closest lap number for this message time
+                msg_time = msg.get('Time')
+                if msg_time is not None and hasattr(session, 'laps') and len(session.laps) > 0:
+                    lap_times = session.laps[['LapNumber', 'Time']].dropna()
+                    if len(lap_times) > 0:
+                        closest_idx = (lap_times['Time'] - msg_time).abs().idxmin()
+                        lap_num = lap_times.loc[closest_idx, 'LapNumber']
+                    else:
+                        continue
+                else:
+                    continue
+
+                if 'SAFETY CAR DEPLOYED' in status or (category == 'SAFETYCAR' and 'DEPLOYED' in status):
+                    sc_on = True
+                    sc_start = lap_num
+                elif 'SAFETY CAR IN' in status or (sc_on and 'ENDING' in status):
+                    if sc_on and sc_start is not None:
+                        ax.axvspan(sc_start, lap_num, alpha=0.15, color='yellow',
+                                  label='SC' if not sc_labeled else None)
+                        sc_labeled = True
+                    sc_on = False
+                    sc_start = None
+                elif 'VIRTUAL SAFETY CAR DEPLOYED' in status or 'VSC DEPLOYED' in status:
+                    vsc_on = True
+                    vsc_start = lap_num
+                elif 'VSC ENDING' in status or (vsc_on and 'ENDING' in status):
+                    if vsc_on and vsc_start is not None:
+                        ax.axvspan(vsc_start, lap_num, alpha=0.15, color='orange',
+                                  label='VSC' if not vsc_labeled else None)
+                        vsc_labeled = True
+                    vsc_on = False
+                    vsc_start = None
+        except Exception:
+            pass  # If race control messages aren't available, skip SC overlay
+
     ax.set_ylim([20.5, 0.5])
     ax.set_yticks([1, 5, 10, 15, 20])
     ax.set_xlabel('Lap')
@@ -1759,7 +1758,7 @@ def positions_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
     return "success"
 
 def battles_func(input_list, datetime):
@@ -1811,7 +1810,7 @@ def battles_func(input_list, datetime):
                     
             quali_results[driver] = position
                 
-        all_quali_results = all_quali_results._append(quali_results, ignore_index=True)
+        all_quali_results = pd.concat([all_quali_results, pd.DataFrame([quali_results])], ignore_index=True)
         
         current_round += 1
         
@@ -1854,9 +1853,7 @@ def battles_func(input_list, datetime):
     # Create custom color palette
     # custom_palette = sns.set_palette(sns.color_palette(team_colors_palette))
     custom_palette = sns.color_palette(team_colors_palette)
-    queue.append(datetime)
-
-    wait_for_turn(datetime)
+    mpl_lock.acquire()
 
     plotting.setup_mpl()
     
@@ -1906,7 +1903,96 @@ def battles_func(input_list, datetime):
     plt.savefig(dir_path + get_path() + "res" + get_path() + "output" + get_path() + str(datetime) + '.png', bbox_inches='tight')
     
     rstall(plt)
-    queue.remove(datetime)
+    mpl_lock.release()
+    return "success"
+
+def track_func(input_list, datetime):
+    yr = input_list["year"]
+    rc = input_list["race"]
+
+    event = fastf1.get_event(yr, rc)
+
+    text = ""
+    text += f"Circuit: {event['EventName']}\n"
+    text += f"Country: {event['Country']}\n"
+    text += f"Location: {event['Location']}\n"
+    text += f"Round: {event['RoundNumber']}\n"
+    text += f"Format: {event.get('EventFormat', 'N/A')}\n\n"
+
+    # Add session dates
+    for i in range(1, 6):
+        session_name = event.get(f'Session{i}', None)
+        session_date = event.get(f'Session{i}Date', None)
+        if session_name and str(session_name) != 'nan':
+            date_str = str(session_date)[:10] if session_date else 'TBD'
+            text += f"{session_name}: {date_str}\n"
+
+    make_img(datetime, text)
+    return "success"
+
+def driver_stats_func(input_list, datetime):
+    yr = input_list["year"]
+    drivers = input_list["drivers"]
+    driver = drivers[0] if isinstance(drivers, list) else drivers
+
+    # Get all race results for the season
+    url = f'https://api.jolpi.ca/ergast/f1/{yr}/results.json?limit=1000'
+    response = requests.get(url).json()
+    races = response['MRData']['RaceTable']['Races']
+
+    wins = 0
+    podiums = 0
+    dnfs = 0
+    points = 0
+    grid_positions = []
+    finish_positions = []
+    fastest_laps = 0
+    races_entered = 0
+
+    for race in races:
+        for result in race['Results']:
+            # Match driver by code or by constructing from driverId
+            code = result['Driver'].get('code', '')
+            if code.upper() != driver.upper():
+                continue
+
+            races_entered += 1
+            pos = int(result['position'])
+            grid = int(result['grid'])
+            pts = float(result['points'])
+            status = result['status']
+
+            points += pts
+            grid_positions.append(grid)
+            finish_positions.append(pos)
+
+            if pos == 1:
+                wins += 1
+            if pos <= 3:
+                podiums += 1
+            if status != 'Finished' and not status.startswith('+'):
+                dnfs += 1
+            if result.get('FastestLap', {}).get('rank') == '1':
+                fastest_laps += 1
+
+    if races_entered == 0:
+        text = f"No data found for {driver} in {yr}"
+    else:
+        avg_grid = sum(grid_positions) / len(grid_positions) if grid_positions else 0
+        avg_finish = sum(finish_positions) / len(finish_positions) if finish_positions else 0
+
+        text = f"Driver Stats: {driver} - {yr}\n"
+        text += f"{'='*35}\n"
+        text += f"Races:         {races_entered}\n"
+        text += f"Points:        {points:.0f}\n"
+        text += f"Wins:          {wins}\n"
+        text += f"Podiums:       {podiums}\n"
+        text += f"Fastest Laps:  {fastest_laps}\n"
+        text += f"DNFs:          {dnfs}\n"
+        text += f"Avg Grid:      {avg_grid:.1f}\n"
+        text += f"Avg Finish:    {avg_finish:.1f}\n"
+
+    make_img(datetime, text)
     return "success"
 
 ### END OF PLOTTING FUNCTIONS ###
