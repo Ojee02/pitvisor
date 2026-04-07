@@ -646,24 +646,30 @@ def gear_func(input_list, datetime):
     lc_comp.set_array(gear)
     lc_comp.set_linewidth(4)
 
-    plt.gca().add_collection(lc_comp)
+    fig = plt.gcf()
+    ax = plt.gca()
+    fig.patch.set_facecolor('#1e1e1e')
+    ax.set_facecolor('#1e1e1e')
+
+    ax.add_collection(lc_comp)
     plt.axis('equal')
     plt.tick_params(labelleft=False, left=False,
                     labelbottom=False, bottom=False)
 
-    # sn = session.event.get_session_name(sn)
-
     if (lap == None or lap == ''):
         plt.suptitle(
-            f"Fastest Lap Gear Shift Visualization - " + f"{d_lap['Driver']}\n" + f"{yr} {rc} {sn}\n")
+            f"Fastest Lap Gear Shift Visualization - " + f"{d_lap['Driver']}\n" + f"{yr} {rc} {sn}\n", color='white')
     else:
         plt.suptitle(f"Lap {lap} Gear Shift Visualization - " +
-                     f"{d_lap['Driver']}\n" + f"{yr} {rc} {sn}\n")
+                     f"{d_lap['Driver']}\n" + f"{yr} {rc} {sn}\n", color='white')
 
     cbar = plt.colorbar(mappable=lc_comp, label="Gear",
                         boundaries=np.arange(1, 10))
     cbar.set_ticks(np.arange(1.5, 9.5))
     cbar.set_ticklabels(np.arange(1, 9))
+    cbar.ax.yaxis.set_tick_params(color='white')
+    cbar.set_label("Gear", color='white')
+    plt.setp(plt.getp(cbar.ax, 'yticklabels'), color='white')
 
     plot_corners(plt.gca(), session)
 
@@ -722,26 +728,24 @@ def speed_func(input_list, datetime):
     # We create a plot with title and adjust some setting to make it look good.
     fig, ax = plt.subplots(sharex=True, sharey=True, figsize=(12, 6.75))
 
+    fig.patch.set_facecolor('#1e1e1e')
+    ax.set_facecolor('#1e1e1e')
+
     plt.rcParams["figure.figsize"] = [7, 5]
     plt.rcParams["figure.autolayout"] = True
 
-    # sn = session.event.get_session_name(sn)
-
     if (lap == None or lap == ''):
         fig.suptitle("Fastest Lap Speed Visualization - " +
-                     f"{d_lap['Driver']}" + "\n" + f"{yr} {rc} {sn}\n", size=20, y=0.97)
+                     f"{d_lap['Driver']}" + "\n" + f"{yr} {rc} {sn}\n", size=20, y=0.97, color='white')
     else:
         fig.suptitle("Lap " + str(lap) + " Speed Visualization - " +
-                     f"{d_lap['Driver']}" + "\n" + f"{yr} {rc} {sn}\n", size=20, y=0.97)
+                     f"{d_lap['Driver']}" + "\n" + f"{yr} {rc} {sn}\n", size=20, y=0.97, color='white')
 
-    # Adjust margins and turn of axis
     plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.12)
     ax.axis('off')
 
-    # After this, we plot the data itself.
-    # Create background track line
     ax.plot(d_lap.telemetry['X'], d_lap.telemetry['Y'],
-            color='black', linestyle='-', linewidth=16, zorder=0)
+            color='#333333', linestyle='-', linewidth=16, zorder=0)
 
     # Create a continuous norm to map from data points to colors
     norm = plt.Normalize(color.min(), color.max())
@@ -1248,8 +1252,8 @@ def tires_func(input_list, datetime):
         for idx, (_, lap_data) in enumerate(driver_laps.iterlaps()):
             compound = lap_data['Compound']
             lap_num = lap_data['RaceLapNumber']
-            # Always include: first lap of stint, every 5th lap
-            if compound != prev_compound or idx % 5 == 0:
+            # Always include: first lap of stint, every 10th lap
+            if compound != prev_compound or idx % 10 == 0:
                 sampled_laps.append(lap_data)
             prev_compound = compound
 
@@ -1335,7 +1339,12 @@ def tires_func(input_list, datetime):
         plt.rcParams['figure.figsize'] = [12, 5]
         plt.rcParams["figure.autolayout"] = True
 
-        plt.gca().add_collection(lc_comp)
+        fig = plt.gcf()
+        ax = plt.gca()
+        fig.patch.set_facecolor('#1e1e1e')
+        ax.set_facecolor('#1e1e1e')
+
+        ax.add_collection(lc_comp)
         plt.axis('equal')
         plt.tick_params(labelleft=False, left=False,
                         labelbottom=False, bottom=False)
@@ -1343,11 +1352,11 @@ def tires_func(input_list, datetime):
         cbar = plt.colorbar(mappable=lc_comp, boundaries=np.arange(1, 5))
         cbar.set_ticks(np.arange(1.5, 4.5))
         cbar.set_ticklabels(['Inters', 'Wets', 'Slicks'])
-
-        # sn = session.event.get_session_name(sn)
+        cbar.ax.yaxis.set_tick_params(color='white')
+        plt.setp(plt.getp(cbar.ax, 'yticklabels'), color='white')
 
         plt.suptitle(
-            f"{yr} {rc} {sn}\n Lap {sl} - Tire Comparison")
+            f"{yr} {rc} {sn}\n Lap {sl} - Tire Comparison", color='white')
 
     generate_minisector_plot(sl, sn)
     plot_corners(plt.gca(), session)
@@ -1583,12 +1592,15 @@ def sectors_func(input_list, datetime):
     lc_comp.set_array(fastest_driver_array)
     lc_comp.set_linewidth(5)
 
-    # Create the plot
     plt.rcParams['figure.figsize'] = [18, 10]
     plt.rcParams["figure.autolayout"] = True
 
-    # Plot the line collection and style the plot
-    plt.gca().add_collection(lc_comp)
+    fig = plt.gcf()
+    ax = plt.gca()
+    fig.patch.set_facecolor('#1e1e1e')
+    ax.set_facecolor('#1e1e1e')
+
+    ax.add_collection(lc_comp)
     plt.axis('equal')
     plt.box(False)
     plt.tick_params(labelleft=False, left=False,
@@ -1611,7 +1623,9 @@ def sectors_func(input_list, datetime):
     # sn = session.event.get_session_name(sn)
 
     plt.suptitle(f"{yr} {rc} {sn} - Fastest Sectors\n" +
-                 d1 + " (" + lap1 + ") vs " + d2 + " (" + lap2 + ")", size=25)
+                 d1 + " (" + lap1 + ") vs " + d2 + " (" + lap2 + ")", size=25, color='white')
+    cbar.ax.yaxis.set_tick_params(color='white')
+    plt.setp(plt.getp(cbar.ax, 'yticklabels'), color='white')
 
     plot_corners(plt.gca(), session)
 
