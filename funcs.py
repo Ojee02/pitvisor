@@ -1323,12 +1323,19 @@ def tires_func(input_list, datetime):
     def generate_minisector_plot(lap, sn):
         single_lap = telemetry.loc[telemetry['Lap'] == lap]
 
-        x = np.array(single_lap['X'].values)
-        y = np.array(single_lap['Y'].values)
+        # Use only one driver's X,Y for the track outline to avoid cross-driver artifacts
+        first_driver = single_lap['Driver'].iloc[0] if 'Driver' in single_lap.columns else None
+        if first_driver:
+            track_data = single_lap.loc[single_lap['Driver'] == first_driver]
+        else:
+            track_data = single_lap
+
+        x = np.array(track_data['X'].values)
+        y = np.array(track_data['Y'].values)
 
         points = np.array([x, y]).T.reshape(-1, 1, 2)
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
-        compound = single_lap['Fastest_compound_int'].to_numpy().astype(float)
+        compound = track_data['Fastest_compound_int'].to_numpy().astype(float)
 
         cmap = cm.get_cmap('ocean', 3)
         lc_comp = LineCollection(
