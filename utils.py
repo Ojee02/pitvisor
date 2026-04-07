@@ -195,7 +195,7 @@ def get_sessions_from_db(yr, rc):
 
 def get_drivers_from_db(yr, rc, sn):
     if rc is None and sn is None:
-        # All drivers for the year — try DB, fallback to empty
+        # All drivers for the year — try DB first
         collection = db["data"]
         docs = collection.find({"year": int(yr)})
         drivers = []
@@ -205,7 +205,15 @@ def get_drivers_from_db(yr, rc, sn):
                     drivers.append(driver)
         if drivers:
             return drivers
-        return []
+        # Fallback: fetch from Ergast API
+        try:
+            import requests
+            url = f'https://api.jolpi.ca/ergast/f1/{yr}/drivers.json?limit=100'
+            resp = requests.get(url, timeout=15).json()
+            driver_list = resp['MRData']['DriverTable']['Drivers']
+            return [d.get('code', d['driverId'][:3].upper()) for d in driver_list]
+        except Exception:
+            return []
     # Try DB first
     collection = db["data"]
     doc = collection.find_one({"year": int(yr), "race": rc, "session": sn.capitalize()})
