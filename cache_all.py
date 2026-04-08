@@ -63,10 +63,10 @@ def cache_session(yr, rc, sn):
             {"$set": {"drivers": drivers, "laps": laps, "distance": distance}},
             upsert=True
         )
-        return True
+        return True, ""
     except Exception as e:
         log(f"  FAIL: {e}")
-        return False
+        return False, str(e)
 
 def get_sessions(yr, rc):
     if "Pre-Season" in str(rc):
@@ -113,21 +113,26 @@ def main():
                     continue
 
                 log(f"  LOAD {yr} {rc} {sn}...")
-                ok = cache_session(yr, rc, sn)
+                ok, err = cache_session(yr, rc, sn)
                 if ok:
                     log(f"  OK   {yr} {rc} {sn}")
                     total_cached += 1
                 else:
                     total_failed += 1
-                    if 'API' in str(total_failed) or True:
-                        log(f"  Rate limited — waiting 60s...")
-                        time.sleep(60)
+                    if 'has not been loaded yet' in err:
+                        log(f"  No data yet — skipping rest of {yr}")
+                        break
+                    log(f"  Waiting 60s...")
+                    time.sleep(60)
 
                 # Delay between sessions (avoid rate limit)
                 time.sleep(10)
 
-            # Delay between races
-            time.sleep(5)
+            else:
+                # Only continue to next race if inner loop didn't break
+                time.sleep(5)
+                continue
+            break  # Break out of races loop too (skip rest of year)
 
     log(f"\n{'='*50}")
     log(f"DONE: {total_cached} cached, {total_skipped} skipped, {total_failed} failed")
