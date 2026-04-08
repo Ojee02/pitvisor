@@ -692,8 +692,19 @@ def track_data(input_list):
         if name and str(name) != 'nan':
             sessions.append({"name": str(name), "date": str(date)[:10] if date else "TBD"})
 
-    # Slug for F1 API (e.g. "Bahrain Grand Prix" -> "bahrain")
-    slug = rc.lower().replace(' grand prix', '').replace(' ', '-').strip()
+    # Slug for F1 API (e.g. "Japanese Grand Prix" -> "japan", "Saudi Arabian Grand Prix" -> "saudi-arabia")
+    SLUG_MAP = {
+        'japanese': 'japan', 'australian': 'australia', 'chinese': 'china',
+        'saudi arabian': 'saudi-arabia', 'hungarian': 'hungary', 'belgian': 'belgium',
+        'italian': 'italy', 'mexican': 'mexico', 'brazilian': 'brazil',
+        'british': 'great-britain', 'canadian': 'canada', 'spanish': 'spain',
+        'austrian': 'austria', 'dutch': 'netherlands', 'singapore': 'singapore',
+        'monaco': 'monaco', 'miami': 'miami', 'bahrain': 'bahrain',
+        'qatar': 'qatar', 'abu dhabi': 'abu-dhabi', 'las vegas': 'las-vegas',
+        'emilia romagna': 'emilia-romagna', 'azerbaijan': 'azerbaijan',
+    }
+    raw = rc.lower().replace(' grand prix', '').strip()
+    slug = SLUG_MAP.get(raw, raw.replace(' ', '-'))
     f1_data = _f1_api(f"/v1/editorial-assemblies/races?season={yr}&identifier={slug}")
 
     track_stats = {}
@@ -789,40 +800,35 @@ def driver_stats_data(input_list):
             if status != 'Finished' and not status.startswith('+'): dnfs += 1
             if r.get('FastestLap', {}).get('rank') == '1': fastest_laps += 1
 
-    # Driver profile from OpenF1 (headshot, team, number)
+    # Driver profile — only fetch current photos/team for current or recent year
+    import datetime as _dt
+    current_year = _dt.datetime.now().year
     profile = {}
-    try:
-        of1 = requests.get(f'https://api.openf1.org/v1/drivers?name_acronym={driver}&session_key=latest', timeout=5).json()
-        if of1:
-            d = of1[0]
-            profile = {
-                "headshot": d.get('headshot_url'),
-                "number": d.get('driver_number'),
-                "team": d.get('team_name'),
-                "team_color": d.get('team_colour'),
-                "full_name": d.get('full_name'),
-                "country_code": d.get('country_code'),
-            }
-    except Exception:
-        pass
-
-    # Try F1 official API for number image
-    if profile.get('full_name'):
+    if yr >= current_year - 1:
         try:
-            fname = profile['full_name'].split()[0].lower()
-            lname = profile['full_name'].split()[-1].lower()
-            slug = f"{fname}-{lname}"
-            f1d = _f1_api(f"/v1/editorial-driverlisting/listing")
-            for entry in f1d.get('drivers', f1d.get('Items', [])):
-                tla = entry.get('driverTLA', entry.get('driverShortName', ''))
-                if tla.upper() == driver.upper():
-                    profile['number_image'] = entry.get('driverNumberImage', {}).get('url')
-                    if not profile.get('headshot'):
-                        profile['headshot'] = entry.get('driverImage', {}).get('url')
-                    profile['country_flag'] = entry.get('driverCountryFlagImage', {}).get('url')
-                    break
+            of1 = requests.get(f'https://api.openf1.org/v1/drivers?name_acronym={driver}&session_key=latest', timeout=5).json()
+            if of1:
+                d = of1[0]
+                profile = {
+                    "headshot": d.get('headshot_url'),
+                    "number": d.get('driver_number'),
+                    "team": d.get('team_name'),
+                    "team_color": d.get('team_colour'),
+                    "full_name": d.get('full_name'),
+                    "country_code": d.get('country_code'),
+                }
         except Exception:
             pass
+
+    # Get team from season results for historical years
+    if not profile.get('team') and races:
+        for race in races:
+            for r in race['Results']:
+                if r['Driver'].get('code', '').upper() == driver.upper():
+                    profile['team'] = r['Constructor']['name']
+                    break
+            if profile.get('team'):
+                break
 
     # Driver bio info from Jolpica
     bio = {}
