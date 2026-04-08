@@ -321,7 +321,7 @@ def laps_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
 
     plotting.setup_mpl()
     fig, ax = plt.subplots()
@@ -377,7 +377,7 @@ def time_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
 
     plotting.setup_mpl()
     fig, ax = plt.subplots()
@@ -449,7 +449,7 @@ def distance_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
 
     plotting.setup_mpl()
     fig, ax = plt.subplots()
@@ -521,7 +521,7 @@ def delta_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
     
     if (d1 == None or d1 == ''):
         d1 = session.laps.pick_fastest()['Driver']
@@ -607,7 +607,7 @@ def gear_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
     
     rstall(plt)
 
@@ -695,7 +695,7 @@ def speed_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
 
     # weekend = session.event
 
@@ -788,7 +788,7 @@ def tel_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
 
     weekend = session.event
     laps = session.laps
@@ -981,7 +981,7 @@ def cornering_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
 
     # Get the laps
     laps = session.laps
@@ -1485,7 +1485,7 @@ def sectors_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
 
     rstall(plt)
 
@@ -1658,7 +1658,7 @@ def rt_func(input_list, datetime):
     
     mpl_lock.acquire()
     
-    mpl_lock.acquire()
+
 
     plotting.setup_mpl()
     fig, ax = plt.subplots()
