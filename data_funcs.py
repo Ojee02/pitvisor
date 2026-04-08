@@ -711,37 +711,68 @@ def track_data(input_list):
     circuit_map = None
     country_flag = None
     try:
-        race_obj = f1_data.get('race', f1_data)
-        ts = race_obj.get('trackStats', {})
+        # Track stats are inside 'race' object
+        race_obj = f1_data.get('race', {})
         track_stats = {
-            "length": ts.get('trackLength', ''),
-            "direction": ts.get('direction', ''),
-            "first_gp": ts.get('venueFirstSeason', ''),
-            "lap_record_time": ts.get('fastestLapTime', ''),
-            "lap_record_driver": ts.get('fastestLapDriver', ''),
-            "lap_record_year": ts.get('fastestLapSeason', ''),
-            "lap_record_team": ts.get('fastestLapTeam', ''),
-            "type": ts.get('circuitType', ''),
-            "official_name": ts.get('circuitOfficialName', ''),
+            "length": race_obj.get('scheduledDistance', '') or '',
+            "direction": '',
+            "first_gp": '',
+            "lap_record_time": '',
+            "lap_record_driver": '',
+            "lap_record_year": '',
+            "lap_record_team": '',
+            "type": race_obj.get('circuitType', ''),
+            "official_name": race_obj.get('circuitOfficialName', ''),
         }
-        # Images
-        ci = race_obj.get('circuitMapImage', race_obj.get('circuitImage', {}))
-        if isinstance(ci, dict) and ci.get('url'):
-            circuit_map = ci['url']
-        elif isinstance(ci, dict) and ci.get('public_id'):
-            circuit_map = f"https://media.formula1.com/image/upload/{ci['public_id']}.png"
-        cf = race_obj.get('raceCountryFlag', {})
-        if isinstance(cf, dict) and cf.get('url'):
+        # trackStats might be nested or flat in race
+        ts = race_obj.get('trackStats', {})
+        if ts:
+            track_stats.update({
+                "length": ts.get('trackLength', track_stats['length']),
+                "direction": ts.get('direction', ''),
+                "first_gp": ts.get('venueFirstSeason', ''),
+                "lap_record_time": ts.get('fastestLapTime', ''),
+                "lap_record_driver": ts.get('fastestLapDriver', ''),
+                "lap_record_year": ts.get('fastestLapSeason', ''),
+                "lap_record_team": ts.get('fastestLapTeam', ''),
+                "type": ts.get('circuitType', track_stats['type']),
+                "official_name": ts.get('circuitOfficialName', track_stats['official_name']),
+            })
+
+        # Images are at TOP LEVEL of f1_data, not inside race
+        cmi = f1_data.get('circuitMapImage')
+        if isinstance(cmi, str) and cmi.startswith('http'):
+            circuit_map = cmi
+        elif isinstance(cmi, dict):
+            circuit_map = cmi.get('url') or f"https://media.formula1.com/image/upload/{cmi.get('public_id','')}.png"
+
+        # Fallback: circuitImage (public_id only)
+        if not circuit_map:
+            ci = f1_data.get('circuitImage')
+            if isinstance(ci, str) and ci:
+                circuit_map = f"https://media.formula1.com/image/upload/{ci}.png"
+            elif isinstance(ci, dict) and ci.get('public_id'):
+                circuit_map = f"https://media.formula1.com/image/upload/{ci['public_id']}.png"
+
+        cf = f1_data.get('raceCountryFlag')
+        if isinstance(cf, str) and cf.startswith('http'):
+            country_flag = cf
+        elif isinstance(cf, dict) and cf.get('url'):
             country_flag = cf['url']
     except Exception:
         pass
 
-    # Race count from Jolpica
+    # Race count from Jolpica — try circuit short name from F1 API
     race_count = None
     try:
-        cid = event.get('EventName', rc).lower().replace(' grand prix', '').replace(' ', '_')
-        r = requests.get(f'https://api.jolpi.ca/ergast/f1/circuits/{cid}/seasons.json?limit=0', timeout=5)
-        race_count = int(r.json()['MRData']['total'])
+        race_obj = f1_data.get('race', {})
+        cname = race_obj.get('circuitShortName', '').lower().replace(' ', '_')
+        if not cname:
+            cname = event.get('Location', '').lower().replace(' ', '_')
+        r = requests.get(f'https://api.jolpi.ca/ergast/f1/circuits/{cname}/seasons.json?limit=0', timeout=5)
+        total = int(r.json()['MRData']['total'])
+        if total > 0:
+            race_count = total
     except Exception:
         pass
 
