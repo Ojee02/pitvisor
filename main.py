@@ -275,11 +275,12 @@ async def main_helper(request):
         datetime = get_datetime()
         output_path = dir_path + get_path() + "res" + get_path() + "output" + get_path()
         res = await command(user_id, input_list, func_name.lower(), datetime)
-        with open(output_path + res + ".png", "rb") as image:
+        filepath = output_path + res if res.endswith('.png') else output_path + res + ".png"
+        with open(filepath, "rb") as image:
             f = image.read()
             b = bytearray(f)
         result = list(b)
-        os.remove(output_path + res + ".png")
+        os.remove(filepath)
         return jsonify({'result': result, 'datetime': datetime}), 200
     except Exception as exc:
         return jsonify({'error': str(exc)}), 400
