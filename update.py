@@ -22,6 +22,29 @@ except ImportError:
 
 load_dotenv()
 
+# Load a session for team colors (FastF1 3.8+ requires session)
+_color_session = None
+
+def _load_color_session(yr):
+    global _color_session
+    if _color_session is not None:
+        return
+    try:
+        schedule = ff1.get_event_schedule(yr)
+        for _, event in schedule.iterrows():
+            if 'Testing' not in event['EventName']:
+                _color_session = ff1.get_session(yr, event['EventName'], 'Race')
+                _color_session.load(telemetry=False, weather=False, laps=False)
+                break
+    except:
+        pass
+
+def _get_team_color(team):
+    try:
+        return ff1.plotting.get_team_color(team, session=_color_session)
+    except:
+        return None
+
 connection_string = os.getenv("connection_string")
 db_name = os.getenv("db_name")
 
@@ -56,6 +79,7 @@ def drvr(driver_standings):
 
 # gets the driver standings and plots them
 def driver_func(yr):
+    _load_color_session(yr)
 
     def ergast_retrieve(api_endpoint: str):
         url = f'https://api.jolpi.ca/ergast/f1/{api_endpoint}.json'
@@ -162,7 +186,7 @@ def driver_func(yr):
     # The reason we do it this way is so that we can specify the team color per driver
     for driver in pd.unique(all_championship_standings_melted['variable']):
         try:
-            color=ff1.plotting.get_team_color(driver_team_mapping[driver])
+            color=_get_team_color(driver_team_mapping[driver])
         except:
             color=colors[color_counter]
         sns.lineplot(
@@ -172,7 +196,7 @@ def driver_func(yr):
             color=color
         )
         try:
-            color=ff1.plotting.get_team_color(driver_team_mapping[driver])
+            color=_get_team_color(driver_team_mapping[driver])
         except:
             color_counter += 1
             if color_counter >= len(colors):
@@ -255,6 +279,7 @@ def constr(constructor_standings):
 
 # get the constructors standings and plots them
 def const_func(yr):
+    _load_color_session(yr)
 
     def ergast_retrieve(api_endpoint: str):
         url = f'https://api.jolpi.ca/ergast/f1/{api_endpoint}.json'
@@ -347,7 +372,7 @@ def const_func(yr):
     # The reason we do it this way is so that we can specify the team color per driver
     for constructor in pd.unique(all_championship_standings_melted['variable']):
         try:
-            color=ff1.plotting.get_team_color(constructor_team_mapping[constructor])
+            color=_get_team_color(constructor_team_mapping[constructor])
         except:
             color=colors[color_counter]
         sns.lineplot(
@@ -357,7 +382,7 @@ def const_func(yr):
             color=color
         )
         try:
-            color=ff1.plotting.get_team_color(constructor_team_mapping[constructor])
+            color=_get_team_color(constructor_team_mapping[constructor])
         except:
             color_counter += 1
             if color_counter >= len(colors):
