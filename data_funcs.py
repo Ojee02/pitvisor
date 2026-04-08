@@ -666,6 +666,19 @@ def battles_data(input_list):
     }
 
 
+# ─── F1 Official API helper ─────────────────────────────────────────────────
+
+F1_API = "https://api.formula1.com"
+F1_KEY = "BQ1SiSmLUOsp460VzXBlLrh689kGgYEZ"
+
+def _f1_api(path):
+    try:
+        r = requests.get(f"{F1_API}{path}", headers={"apikey": F1_KEY, "locale": "en"}, timeout=10)
+        return r.json() if r.status_code == 200 else {}
+    except Exception:
+        return {}
+
+
 # ─── TRACK ──────────────────────────────────────────────────────────────────
 
 def track_data(input_list):
@@ -679,6 +692,48 @@ def track_data(input_list):
         if name and str(name) != 'nan':
             sessions.append({"name": str(name), "date": str(date)[:10] if date else "TBD"})
 
+    # Slug for F1 API (e.g. "Bahrain Grand Prix" -> "bahrain")
+    slug = rc.lower().replace(' grand prix', '').replace(' ', '-').strip()
+    f1_data = _f1_api(f"/v1/editorial-assemblies/races?season={yr}&identifier={slug}")
+
+    track_stats = {}
+    circuit_map = None
+    country_flag = None
+    try:
+        race_obj = f1_data.get('race', f1_data)
+        ts = race_obj.get('trackStats', {})
+        track_stats = {
+            "length": ts.get('trackLength', ''),
+            "direction": ts.get('direction', ''),
+            "first_gp": ts.get('venueFirstSeason', ''),
+            "lap_record_time": ts.get('fastestLapTime', ''),
+            "lap_record_driver": ts.get('fastestLapDriver', ''),
+            "lap_record_year": ts.get('fastestLapSeason', ''),
+            "lap_record_team": ts.get('fastestLapTeam', ''),
+            "type": ts.get('circuitType', ''),
+            "official_name": ts.get('circuitOfficialName', ''),
+        }
+        # Images
+        ci = race_obj.get('circuitMapImage', race_obj.get('circuitImage', {}))
+        if isinstance(ci, dict) and ci.get('url'):
+            circuit_map = ci['url']
+        elif isinstance(ci, dict) and ci.get('public_id'):
+            circuit_map = f"https://media.formula1.com/image/upload/{ci['public_id']}.png"
+        cf = race_obj.get('raceCountryFlag', {})
+        if isinstance(cf, dict) and cf.get('url'):
+            country_flag = cf['url']
+    except Exception:
+        pass
+
+    # Race count from Jolpica
+    race_count = None
+    try:
+        cid = event.get('EventName', rc).lower().replace(' grand prix', '').replace(' ', '_')
+        r = requests.get(f'https://api.jolpi.ca/ergast/f1/circuits/{cid}/seasons.json?limit=0', timeout=5)
+        race_count = int(r.json()['MRData']['total'])
+    except Exception:
+        pass
+
     return {
         "type": "track",
         "title": f"{event['EventName']}",
@@ -689,6 +744,10 @@ def track_data(input_list):
             "round": int(event['RoundNumber']),
             "format": str(event.get('EventFormat', 'N/A')).replace('_', ' ').title(),
             "sessions": sessions,
+            "track_stats": track_stats,
+            "circuit_map": circuit_map,
+            "country_flag": country_flag,
+            "race_count": race_count,
         },
     }
 
@@ -700,18 +759,22 @@ def driver_stats_data(input_list):
     drivers = input_list["drivers"]
     driver = drivers[0] if isinstance(drivers, list) else drivers
 
+    # Season stats from Jolpica
     url = f'https://api.jolpi.ca/ergast/f1/{yr}/results.json?limit=1000'
-    resp = requests.get(url).json()
+    resp = requests.get(url, timeout=15).json()
     races = resp['MRData']['RaceTable']['Races']
 
     wins = podiums = dnfs = points = fastest_laps = races_entered = 0
     grid_positions = []
     finish_positions = []
+    driver_id = None
 
     for race in races:
         for r in race['Results']:
             if r['Driver'].get('code', '').upper() != driver.upper():
                 continue
+            if not driver_id:
+                driver_id = r['Driver']['driverId']
             races_entered += 1
             pos = int(r['position'])
             grid = int(r['grid'])
@@ -726,18 +789,82 @@ def driver_stats_data(input_list):
             if status != 'Finished' and not status.startswith('+'): dnfs += 1
             if r.get('FastestLap', {}).get('rank') == '1': fastest_laps += 1
 
-    if races_entered == 0:
+    # Driver profile from OpenF1 (headshot, team, number)
+    profile = {}
+    try:
+        of1 = requests.get(f'https://api.openf1.org/v1/drivers?name_acronym={driver}&session_key=latest', timeout=5).json()
+        if of1:
+            d = of1[0]
+            profile = {
+                "headshot": d.get('headshot_url'),
+                "number": d.get('driver_number'),
+                "team": d.get('team_name'),
+                "team_color": d.get('team_colour'),
+                "full_name": d.get('full_name'),
+                "country_code": d.get('country_code'),
+            }
+    except Exception:
+        pass
+
+    # Try F1 official API for number image
+    if profile.get('full_name'):
+        try:
+            fname = profile['full_name'].split()[0].lower()
+            lname = profile['full_name'].split()[-1].lower()
+            slug = f"{fname}-{lname}"
+            f1d = _f1_api(f"/v1/editorial-driverlisting/listing")
+            for entry in f1d.get('drivers', f1d.get('Items', [])):
+                tla = entry.get('driverTLA', entry.get('driverShortName', ''))
+                if tla.upper() == driver.upper():
+                    profile['number_image'] = entry.get('driverNumberImage', {}).get('url')
+                    if not profile.get('headshot'):
+                        profile['headshot'] = entry.get('driverImage', {}).get('url')
+                    profile['country_flag'] = entry.get('driverCountryFlagImage', {}).get('url')
+                    break
+        except Exception:
+            pass
+
+    # Driver bio info from Jolpica
+    bio = {}
+    if driver_id:
+        try:
+            r = requests.get(f'https://api.jolpi.ca/ergast/f1/drivers/{driver_id}.json', timeout=5).json()
+            d = r['MRData']['DriverTable']['Drivers'][0]
+            bio = {
+                "full_name": f"{d['givenName']} {d['familyName']}",
+                "dob": d.get('dateOfBirth'),
+                "nationality": d.get('nationality'),
+                "number": d.get('permanentNumber'),
+            }
+        except Exception:
+            pass
+
+    if races_entered == 0 and not profile and not bio:
         return {"type": "driverstats", "title": f"{driver} — {yr}", "data": None}
 
     return {
         "type": "driverstats",
-        "title": f"{driver} — {yr}",
+        "title": f"{profile.get('full_name') or bio.get('full_name') or driver} — {yr}",
         "data": {
-            "driver": driver, "year": yr, "races": races_entered,
-            "points": points, "wins": wins, "podiums": podiums,
-            "fastest_laps": fastest_laps, "dnfs": dnfs,
-            "avg_grid": round(sum(grid_positions) / len(grid_positions), 1),
-            "avg_finish": round(sum(finish_positions) / len(finish_positions), 1),
+            "driver": driver,
+            "year": yr,
+            "full_name": profile.get('full_name') or bio.get('full_name'),
+            "nationality": bio.get('nationality'),
+            "dob": bio.get('dob'),
+            "number": profile.get('number') or bio.get('number'),
+            "team": profile.get('team'),
+            "team_color": profile.get('team_color'),
+            "headshot": profile.get('headshot'),
+            "number_image": profile.get('number_image'),
+            "country_flag": profile.get('country_flag'),
+            "races": races_entered,
+            "points": points,
+            "wins": wins,
+            "podiums": podiums,
+            "fastest_laps": fastest_laps,
+            "dnfs": dnfs,
+            "avg_grid": round(sum(grid_positions) / len(grid_positions), 1) if grid_positions else None,
+            "avg_finish": round(sum(finish_positions) / len(finish_positions), 1) if finish_positions else None,
         },
     }
 
