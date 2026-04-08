@@ -88,6 +88,32 @@ def get_path():
 
 # get_sess is imported from utils.py via update.py
 
+# Color helpers (FastF1 3.8+ requires session)
+TEAM_COLORS = {
+    'Red Bull Racing': '#3671C6', 'Ferrari': '#E8002D', 'Mercedes': '#27F4D2',
+    'McLaren': '#FF8000', 'Aston Martin': '#229971', 'Alpine F1 Team': '#FF87BC',
+    'Williams': '#64C4FF', 'RB F1 Team': '#6692FF', 'AlphaTauri': '#6692FF',
+    'Kick Sauber': '#52E252', 'Haas F1 Team': '#B6BABD', 'Alfa Romeo': '#C92D4B',
+    'Racing Point': '#F596C8', 'Renault': '#FFF500', 'Toro Rosso': '#6692FF',
+    'Force India': '#F596C8', 'Sauber': '#52E252',
+}
+
+def _driver_col(driver, session=None):
+    try:
+        return fastf1.plotting.get_driver_color(driver, session=session)
+    except:
+        pass
+    try:
+        return _driver_col(driver, session)
+    except:
+        return 'grey'
+
+def _team_col(team, session=None):
+    try:
+        return fastf1.plotting.get_team_color(team, session=session)
+    except:
+        return TEAM_COLORS.get(team, 'grey')
+
 # reset mpl
 def rstall(plt):
     plt.clf()
@@ -202,7 +228,7 @@ def fastest_func(input_list, datetime):
     team_colors = list()
     for index, lap in fastest_laps.iterlaps():
         try:
-            color = fastf1.plotting.get_team_color(lap['Team'])
+            color = _team_col(lap['Team'], session)
         except:
             color = 'grey'
         team_colors.append(color)
@@ -574,13 +600,13 @@ def delta_func(input_list, datetime):
 
     try:
         ax.plot(ref_tel['Distance'], ref_tel['Speed'],
-                color=fastf1.plotting.driver_color(d1), label=d1)
+                color=_driver_col(d1, session), label=d1)
     except:
         ax.plot(ref_tel['Distance'], ref_tel['Speed'], color='grey', label=d1)
     try:
         if (d1 != d2):
             ax.plot(compare_tel['Distance'], compare_tel['Speed'],
-                    color=fastf1.plotting.driver_color(d2), label=d2)
+                    color=_driver_col(d2, session), label=d2)
         else:
             ax.plot(compare_tel['Distance'],
                     compare_tel['Speed'], color='#777777', label=d2)
@@ -831,7 +857,7 @@ def tel_func(input_list, datetime):
     first_driver_info = session.get_driver(drv1)
 
     try:
-        first_color = fastf1.plotting.driver_color(d1)
+        first_color = _driver_col(d1, session)
     except:
         first_color = 'grey'
 
@@ -840,7 +866,7 @@ def tel_func(input_list, datetime):
 
     try:
         if (d1 != d2):
-            second_color = fastf1.plotting.driver_color(d2)
+            second_color = _driver_col(d2, session)
         else:
             second_color = '#777777'
     except:
@@ -1145,7 +1171,7 @@ def cornering_func(input_list, datetime):
 
     try:
         ax[0].plot(telemetry_driver_1['Distance'], telemetry_driver_1['Speed'],
-                   label=driver_1, color=fastf1.plotting.driver_color(d1))
+                   label=driver_1, color=_driver_col(d1, session))
     except:
         ax[0].plot(telemetry_driver_1['Distance'],
                    telemetry_driver_1['Speed'], label=driver_1, color='grey')
@@ -1153,7 +1179,7 @@ def cornering_func(input_list, datetime):
     try:
         if (d1 != d2):
             ax[0].plot(telemetry_driver_2['Distance'], telemetry_driver_2['Speed'],
-                       label=driver_2, color=fastf1.plotting.driver_color(d2))
+                       label=driver_2, color=_driver_col(d2, session))
         else:
             ax[0].plot(telemetry_driver_2['Distance'],
                        telemetry_driver_2['Speed'], label=driver_2, color='#777777')
@@ -1534,13 +1560,13 @@ def sectors_func(input_list, datetime):
     driver_2 = d2
 
     try:
-        color_1 = fastf1.plotting.driver_color(d1)
+        color_1 = _driver_col(d1, session)
     except:
         color_1 = 'grey'
 
     try:
         if d1 != d2:
-            color_2 = fastf1.plotting.driver_color(d2)
+            color_2 = _driver_col(d2, session)
         else:
             color_2 = '#777777'
     except:
@@ -1731,7 +1757,7 @@ def rt_func(input_list, datetime):
         temp = laps.loc[laps['Driver'] == driver][[
             'Driver', 'LapNumber', 'Cumulative']]
         try:
-            temp_color = fastf1.plotting.driver_color(temp.iloc[0]['Driver'])
+            temp_color = _driver_col(temp.iloc[0]['Driver'], session)
         except:
             temp_color = 'grey'
         ax.plot(temp['LapNumber'], temp['Cumulative'],
@@ -1772,7 +1798,7 @@ def positions_func(input_list, datetime):
 
         abb = drv_laps['Driver'].iloc[0]
         try:
-            color = fastf1.plotting.driver_color(abb)
+            color = _driver_col(abb, session)
         except:
             color = 'grey'
 
@@ -1923,7 +1949,7 @@ def battles_func(input_list, datetime):
             })
 
         try:
-            team_colors_palette.append(fastf1.plotting.get_team_color(team))
+            team_colors_palette.append(_team_col(team))
         except:
             team_colors_palette.append(None)
         # If none, replace None with grey
