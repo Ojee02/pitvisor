@@ -934,7 +934,7 @@ def tel_func(input_list, datetime):
     ax[4].get_xaxis().set_ticklabels([])
 
     fig.align_ylabels()
-    fig.legend((l1, l2), (drv1, drv2), 'upper right', fontsize=20)
+    fig.legend((l1, l2), (drv1, drv2), loc='upper right', fontsize=20)
 
     ax[5].fill_between(second_car['Distance'], drs2,
                        step="pre", color=second_color, alpha=1)
