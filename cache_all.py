@@ -113,19 +113,27 @@ def main():
                     continue
 
                 log(f"  LOAD {yr} {rc} {sn}...")
-                ok, err = cache_session(yr, rc, sn)
-                if ok:
-                    log(f"  OK   {yr} {rc} {sn}")
-                    total_cached += 1
-                else:
-                    total_failed += 1
-                    if 'has not been loaded yet' in err:
+                while True:
+                    ok, err = cache_session(yr, rc, sn)
+                    if ok:
+                        log(f"  OK   {yr} {rc} {sn}")
+                        total_cached += 1
+                        break
+                    elif 'has not been loaded yet' in err:
                         log(f"  No data yet — skipping rest of {yr}")
                         break
-                    log(f"  Waiting 60s...")
-                    time.sleep(60)
+                    elif '500 calls' in err or 'API' in err or 'rate' in err.lower():
+                        log(f"  Rate limited — retrying in 5 min...")
+                        time.sleep(300)
+                    else:
+                        total_failed += 1
+                        log(f"  Failed — skipping")
+                        break
 
-                # Delay between sessions (avoid rate limit)
+                if 'has not been loaded yet' in err:
+                    break
+
+                # Delay between sessions
                 time.sleep(10)
 
             else:
