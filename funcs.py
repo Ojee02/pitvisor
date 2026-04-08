@@ -58,13 +58,29 @@ def get_datetime():
 
 # set mpl font
 def set_font():
-    # set font
     fe = fm.FontEntry(
         fname=dir_path + get_path() + "fonts" + get_path() +
         "Formula1-Regular_web.ttf",
         name='Formula1 Display Regular')
-    fm.fontManager.ttflist.insert(0, fe)  # or append is fine
-    mpl.rcParams['font.family'] = fe.name  # = 'your custom ttf font name'
+    fm.fontManager.ttflist.insert(0, fe)
+    mpl.rcParams['font.family'] = fe.name
+
+# dark mode for all plots
+def setup_dark():
+    mpl.rcParams.update({
+        'figure.facecolor': '#1e1e1e',
+        'axes.facecolor': '#1e1e1e',
+        'axes.edgecolor': '#444444',
+        'axes.labelcolor': 'white',
+        'text.color': 'white',
+        'xtick.color': 'white',
+        'ytick.color': 'white',
+        'grid.color': '#333333',
+        'legend.facecolor': '#2a2a2a',
+        'legend.edgecolor': '#444444',
+        'legend.labelcolor': 'white',
+        'savefig.facecolor': '#1e1e1e',
+    })
 
 # get path separator for os
 def get_path():
@@ -80,6 +96,7 @@ def rstall(plt):
     mpl.rcParams.update(mpl.rcParamsDefault)
     mpl.rcdefaults()
     set_font()
+    setup_dark()
 
 # turn text into image
 
@@ -119,6 +136,7 @@ def make_img(datetime, text):
 
 # set mpl font
 set_font()
+setup_dark()
 
 def plot_corners(ax, session):
     """Annotate corner numbers on a track map axis."""
@@ -160,6 +178,7 @@ def fastest_func(input_list, datetime):
     mpl_lock.acquire()
 
     plotting.setup_mpl()
+    setup_dark()
 
     plt.rcParams["figure.figsize"] = [14, 10]
     plt.rcParams["figure.autolayout"] = True
@@ -324,6 +343,7 @@ def laps_func(input_list, datetime):
 
 
     plotting.setup_mpl()
+    setup_dark()
     fig, ax = plt.subplots()
 
     plt.rcParams["figure.figsize"] = [7, 5]
@@ -380,6 +400,7 @@ def time_func(input_list, datetime):
 
 
     plotting.setup_mpl()
+    setup_dark()
     fig, ax = plt.subplots()
 
     plt.rcParams["figure.figsize"] = [7, 5]
@@ -452,6 +473,7 @@ def distance_func(input_list, datetime):
 
 
     plotting.setup_mpl()
+    setup_dark()
     fig, ax = plt.subplots()
 
     plt.rcParams["figure.figsize"] = [7, 5]
@@ -544,6 +566,7 @@ def delta_func(input_list, datetime):
     delta_time, ref_tel, compare_tel = utils.delta_time(dd1, dd2)
 
     plotting.setup_mpl()
+    setup_dark()
     fig, ax = plt.subplots()
 
     plt.rcParams["figure.figsize"] = [7, 5]
@@ -612,6 +635,7 @@ def gear_func(input_list, datetime):
     rstall(plt)
 
     plotting.setup_mpl()
+    setup_dark()
 
     plt.rcParams["figure.figsize"] = [7, 5]
     plt.rcParams["figure.autolayout"] = True
@@ -725,6 +749,7 @@ def speed_func(input_list, datetime):
     rstall(plt)
 
     plotting.setup_mpl()
+    setup_dark()
     # We create a plot with title and adjust some setting to make it look good.
     fig, ax = plt.subplots(sharex=True, sharey=True, figsize=(12, 6.75))
 
@@ -839,6 +864,7 @@ def tel_func(input_list, datetime):
     second_car = second_driver.get_car_data().add_distance()
 
     plotting.setup_mpl()
+    setup_dark()
     fig, ax = plt.subplots(7, 1, figsize=(20, 20), gridspec_kw={
                            'height_ratios': [2, 2, 2, 2, 2, 2, 3]})
 
@@ -1108,6 +1134,7 @@ def cornering_func(input_list, datetime):
     }
 
     plotting.setup_mpl()
+    setup_dark()
     fig, ax = plt.subplots(2)
 
     ##############################
@@ -1221,6 +1248,7 @@ def tires_func(input_list, datetime):
     mpl_lock.acquire()
 
     plotting.setup_mpl()
+    setup_dark()
 
     plt.rcParams["figure.figsize"] = [7, 5]
     plt.rcParams["figure.autolayout"] = True
@@ -1426,6 +1454,7 @@ def strategy_func(input_list, datetime):
     plt.rcParams["figure.autolayout"] = True
 
     plotting.setup_mpl()
+    setup_dark()
     fig, ax = plt.subplots()
 
     for driver in race.results['Abbreviation']:
@@ -1490,6 +1519,7 @@ def sectors_func(input_list, datetime):
     rstall(plt)
 
     plotting.setup_mpl()
+    setup_dark()
 
     # Explore the lap data
     session.laps
@@ -1661,6 +1691,7 @@ def rt_func(input_list, datetime):
 
 
     plotting.setup_mpl()
+    setup_dark()
     fig, ax = plt.subplots()
 
     plt.rcParams["figure.figsize"] = [10, 8]
@@ -1733,6 +1764,7 @@ def positions_func(input_list, datetime):
     mpl_lock.acquire()
 
     plotting.setup_mpl()
+    setup_dark()
     fig, ax = plt.subplots(figsize=(12.0, 6))
 
     for drv in session.drivers:
@@ -1911,6 +1943,7 @@ def battles_func(input_list, datetime):
     mpl_lock.acquire()
 
     plotting.setup_mpl()
+    setup_dark()
     
     # Load custom font
     font_path = "fonts/Formula1-Regular_web.ttf"  # adjust path if needed
