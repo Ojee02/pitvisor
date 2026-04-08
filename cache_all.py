@@ -123,8 +123,8 @@ def main():
                         log(f"  No data yet — skipping rest of {yr}")
                         break
                     elif '500 calls' in err or 'API' in err or 'rate' in err.lower():
-                        log(f"  Rate limited — retrying in 5 min...")
-                        time.sleep(300)
+                        log(f"  Rate limited — waiting 1 hour...")
+                        time.sleep(3600)
                     else:
                         total_failed += 1
                         log(f"  Failed — skipping")
