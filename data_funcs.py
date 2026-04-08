@@ -876,7 +876,71 @@ def driver_stats_data(input_list):
         except Exception:
             pass
 
-    if races_entered == 0 and not profile and not bio:
+    # Career / lifetime stats
+    career = {}
+    if driver_id:
+        try:
+            c_races = []
+            offset = 0
+            while True:
+                cr = requests.get(f'https://api.jolpi.ca/ergast/f1/drivers/{driver_id}/results.json?limit=100&offset={offset}', timeout=15).json()
+                batch = cr['MRData']['RaceTable']['Races']
+                c_races.extend(batch)
+                total = int(cr['MRData']['total'])
+                offset += len(batch)
+                if offset >= total or not batch:
+                    break
+            c_wins = c_podiums = c_dnfs = c_points = c_fl = c_entered = 0
+            c_grids = []
+            c_finishes = []
+            c_seasons = set()
+            for race in c_races:
+                for r in race['Results']:
+                    c_entered += 1
+                    c_seasons.add(int(race['season']))
+                    pos = int(r['position'])
+                    grid = int(r['grid'])
+                    c_points += float(r['points'])
+                    c_grids.append(grid)
+                    c_finishes.append(pos)
+                    if pos == 1: c_wins += 1
+                    if pos <= 3: c_podiums += 1
+                    status = r['status']
+                    if status != 'Finished' and not status.startswith('+'): c_dnfs += 1
+                    if r.get('FastestLap', {}).get('rank') == '1': c_fl += 1
+
+            # Championships — check each season concurrently
+            championships = 0
+            from concurrent.futures import ThreadPoolExecutor
+            def _check_wdc(szn):
+                try:
+                    sr = requests.get(f'https://api.jolpi.ca/ergast/f1/{szn}/driverStandings/1.json', timeout=5).json()
+                    champ = sr['MRData']['StandingsTable']['StandingsLists'][0]['DriverStandings'][0]
+                    return champ['Driver']['driverId'] == driver_id
+                except Exception:
+                    return False
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                championships = sum(pool.map(_check_wdc, c_seasons))
+
+            sorted_seasons = sorted(c_seasons)
+            career = {
+                "races": c_entered,
+                "points": c_points,
+                "wins": c_wins,
+                "podiums": c_podiums,
+                "fastest_laps": c_fl,
+                "dnfs": c_dnfs,
+                "championships": championships,
+                "seasons": len(c_seasons),
+                "first_season": sorted_seasons[0] if sorted_seasons else None,
+                "last_season": sorted_seasons[-1] if sorted_seasons else None,
+                "avg_grid": round(sum(c_grids) / len(c_grids), 1) if c_grids else None,
+                "avg_finish": round(sum(c_finishes) / len(c_finishes), 1) if c_finishes else None,
+            }
+        except Exception:
+            pass
+
+    if races_entered == 0 and not profile and not bio and not career:
         return {"type": "driverstats", "title": f"{driver} — {yr}", "data": None}
 
     return {
@@ -902,6 +966,7 @@ def driver_stats_data(input_list):
             "dnfs": dnfs,
             "avg_grid": round(sum(grid_positions) / len(grid_positions), 1) if grid_positions else None,
             "avg_finish": round(sum(finish_positions) / len(finish_positions), 1) if finish_positions else None,
+            "career": career,
         },
     }
 
