@@ -63,6 +63,24 @@ def create_app(cache_dir: str | None = None) -> Flask:
     # kick off the background worker
     WORKER.start()
 
+    # Replay auth: anything under /replays/ OR /mode requires a matching
+    # ?key=<token> when REPLAY_AUTH_TOKEN is configured. The global live
+    # stream (/stream, /status, /snapshot, /health, /config, /schedule)
+    # stays completely open — only replay management + consumption is
+    # gated so casual viewers never see 401s.
+    @app.before_request
+    def _require_replay_token():
+        if not config.REPLAY_AUTH_TOKEN:
+            return None  # auth disabled — dev / local mode
+        path = request.path or ""
+        # Only gate replay-related endpoints. Everything else stays open.
+        if not (path.startswith("/replays") or path == "/mode"):
+            return None
+        supplied = request.args.get("key")
+        if supplied == config.REPLAY_AUTH_TOKEN:
+            return None
+        return jsonify({"error": "forbidden"}), 401
+
     # ── basic ───────────────────────────────────────────────────────────
 
     @app.route("/health", methods=["GET"])

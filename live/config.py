@@ -107,6 +107,14 @@ REPLAY_SPEED = _f("PITVISOR_LIVE_REPLAY_SPEED", 10.0)
 # Loop the replay back to the start when it ends.
 REPLAY_LOOP = _b("PITVISOR_LIVE_REPLAY_LOOP", False)
 
+# Shared-secret token that gates the /replays/* endpoints. When set, the
+# client must pass ?key=<token> on every replay URL (query param because
+# EventSource can't add custom headers). When unset, all /replays/*
+# endpoints are open — useful for local dev, but DO NOT leave unset on
+# a publicly reachable deployment. The global live stream is never
+# gated; only replay management/consumption is.
+REPLAY_AUTH_TOKEN = os.environ.get("PITVISOR_LIVE_REPLAY_TOKEN") or None
+
 # Skip the first N seconds of the recording (session time). F1 recordings
 # include ~20-30 min of pre-session activity (installation laps, formation,
 # grid line-up) before the race actually starts — at 1× replay speed that
@@ -138,4 +146,5 @@ def describe() -> dict:
         "replay_loop": REPLAY_LOOP,
         "replay_seek_sec": REPLAY_SEEK_SEC,
         "replay_skip_to_start": REPLAY_SKIP_TO_START,
+        "replay_auth_enabled": REPLAY_AUTH_TOKEN is not None,
     }
