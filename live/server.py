@@ -14,6 +14,7 @@ The SignalR worker is started on import. Gunicorn should run this with:
 import datetime as dt
 import json
 import logging
+import os
 import time
 from typing import Optional
 
@@ -92,6 +93,173 @@ def create_app(cache_dir: str | None = None) -> Flask:
         """Upcoming sessions for the next ~14 days. Used by the frontend
         when no session is live."""
         return jsonify({"sessions": _upcoming_sessions(limit=10)}), 200
+
+    # ── replay management ──────────────────────────────────────────────
+
+    @app.route("/mode", methods=["GET"])
+    def mode():
+        """Current worker mode (live or replay) + replay metadata."""
+        return jsonify({
+            "mode": WORKER.mode,
+            "replay_file": (
+                os.path.basename(WORKER.current_replay_file)
+                if WORKER.current_replay_file else None
+            ),
+            "replay_speed": WORKER.current_replay_speed,
+            "replay_loop": WORKER.current_replay_loop,
+        }), 200
+
+    @app.route("/replays", methods=["GET"])
+    def list_replays():
+        """List downloaded recording files in RECORDING_DIR with their
+        session metadata (pulled from each file's header line)."""
+        rdir = config.RECORDING_DIR
+        out = []
+        if os.path.isdir(rdir):
+            for name in sorted(os.listdir(rdir)):
+                if not name.endswith(".jsonl"):
+                    continue
+                path = os.path.join(rdir, name)
+                try:
+                    st = os.stat(path)
+                    header = {}
+                    with open(path, "r", encoding="utf-8") as f:
+                        first = f.readline().strip()
+                        if first:
+                            try:
+                                header = json.loads(first)
+                            except Exception:
+                                header = {}
+                    out.append({
+                        "name": name,
+                        "size": st.st_size,
+                        "year": header.get("year"),
+                        "event_name": header.get("event_name"),
+                        "session_name": header.get("session_name"),
+                        "duration_sec": header.get("duration_sec"),
+                        "record_count": header.get("record_count"),
+                        "recorded_at": header.get("recorded_at"),
+                    })
+                except Exception as exc:
+                    _log.warning("replay metadata read failed %s: %s", name, exc)
+        return jsonify({"replays": out}), 200
+
+    @app.route("/replays/load", methods=["POST"])
+    def load_replay():
+        """Switch the worker into replay mode using an already-downloaded
+        recording. Body: { name, speed?, loop? }."""
+        try:
+            body = request.get_json(force=True) or {}
+        except Exception:
+            body = {}
+        name = body.get("name")
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        if "/" in name or ".." in name:
+            return jsonify({"error": "invalid name"}), 400
+        path = os.path.join(config.RECORDING_DIR, name)
+        if not os.path.isfile(path):
+            return jsonify({"error": "not found"}), 404
+        speed = float(body.get("speed") or 1.0)
+        loop = bool(body.get("loop") if body.get("loop") is not None else True)
+        try:
+            WORKER.start_replay_mode(path, speed=speed, loop=loop)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+        return jsonify({"status": "ok", "file": name, "mode": WORKER.mode}), 200
+
+    @app.route("/replays/stop", methods=["POST"])
+    def stop_replay():
+        """Switch the worker back to live mode (also stops the replay)."""
+        try:
+            WORKER.start_live_mode()
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+        return jsonify({"status": "ok", "mode": WORKER.mode}), 200
+
+    @app.route("/replays/download", methods=["POST"])
+    def download_replay():
+        """Download a past F1 session from the static archive and write
+        a JSONL recording into RECORDING_DIR. Body: { year, round, session }.
+        This is synchronous — the HTTP request blocks until the download
+        completes (typically a few seconds at ~20 MB for a race)."""
+        try:
+            body = request.get_json(force=True) or {}
+        except Exception:
+            body = {}
+        year = body.get("year")
+        rnd = body.get("round")
+        sess = body.get("session")
+        if year is None or rnd is None or not sess:
+            return jsonify({"error": "year, round, session required"}), 400
+        try:
+            year = int(year)
+            try:
+                rnd = int(rnd)
+            except (TypeError, ValueError):
+                rnd = str(rnd)
+            sess = str(sess)
+        except Exception as exc:
+            return jsonify({"error": f"invalid params: {exc}"}), 400
+
+        from .recorder import download  # deferred import
+        try:
+            out_path = download(
+                year, rnd, sess,
+                out_dir=config.RECORDING_DIR,
+                assume_yes=True,
+            )
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+        return jsonify({
+            "status": "ok",
+            "file": os.path.basename(out_path) if out_path else None,
+        }), 200
+
+    @app.route("/replays/schedule", methods=["GET"])
+    def replay_schedule():
+        """Return the F1 schedule for a given year so the frontend can
+        build a dropdown for the download form. /replays/schedule?year=2025"""
+        try:
+            year = int(request.args.get("year") or dt.datetime.now().year)
+        except ValueError:
+            return jsonify({"error": "invalid year"}), 400
+        try:
+            sched = fastf1.get_event_schedule(year, include_testing=False)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+        if sched is None or sched.empty:
+            return jsonify({"year": year, "events": []}), 200
+        now = dt.datetime.now(dt.timezone.utc)
+        events = []
+        for _, row in sched.iterrows():
+            sessions = []
+            for i in range(1, 6):
+                name = row.get(f"Session{i}")
+                if not name or name in ("None", "none"):
+                    continue
+                start = row.get(f"Session{i}DateUtc")
+                if start is None or pd.isna(start):
+                    continue
+                try:
+                    start_utc = start.to_pydatetime()
+                    if start_utc.tzinfo is None:
+                        start_utc = start_utc.replace(tzinfo=dt.timezone.utc)
+                except Exception:
+                    continue
+                sessions.append({
+                    "name": name,
+                    "start_utc": start_utc.isoformat(),
+                    "past": start_utc < now,
+                })
+            events.append({
+                "round": int(row.get("RoundNumber") or 0),
+                "event_name": str(row.get("EventName") or ""),
+                "location": str(row.get("Location") or ""),
+                "country": str(row.get("Country") or ""),
+                "sessions": sessions,
+            })
+        return jsonify({"year": year, "events": events}), 200
 
     # ── SSE streams ─────────────────────────────────────────────────────
 
