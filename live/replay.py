@@ -140,12 +140,37 @@ def _find_seek_offset(records: list[dict]) -> tuple[int, float]:
     return 0, 0.0
 
 
-def _feed(records: list[dict], speed: float, loop: bool, stop_evt: threading.Event, state=None):
+def _feed(path: str, speed: float, loop: bool, stop_evt: threading.Event, state=None):
+    """Feeder thread: loads the recording, primes the session metadata
+    and track outline, then pumps records through the parse pipeline.
+
+    Loading + priming runs INSIDE this thread (not in the HTTP handler
+    that spawned us) so starting a per-client replay returns to the
+    caller immediately and only the first few hundred ms of the
+    feeder's timeline get lost to warm-up work."""
     # Bind the replay thread's parse context to the target state (defaults
     # to global STATE for boot-time env-var replay; per-client replay
     # sessions pass their own LiveState instance).
     target = state if state is not None else STATE
     parse.bind_state(target)
+
+    # Load + prime here, on the feeder thread, so the caller never blocks.
+    try:
+        header, records = _load(path)
+    except Exception as exc:
+        _log.exception("replay load failed for %s", path)
+        target.mark_active(False)
+        return
+    if not records:
+        _log.warning("replay %s has no records", path)
+        target.mark_active(False)
+        return
+    _log.info("replay loaded: %s (%d records, %.0f sec)",
+              header.get("event_name"), len(records), records[-1]["t_sec"])
+    try:
+        _prime_session(header, state=target)
+    except Exception:
+        _log.exception("_prime_session failed")
 
     seek_index, seek_t = _find_seek_offset(records)
     if seek_index > 0:
@@ -199,27 +224,29 @@ def _feed(records: list[dict], speed: float, loop: bool, stop_evt: threading.Eve
 
 
 def start_replay(path: str, speed: float = 10.0, loop: bool = False, state=None) -> threading.Thread:
-    """Start a background replay thread. Returns the Thread (daemon=True).
+    """Spawn a background feeder thread for `path` and return immediately.
+
+    Loading the recording, priming the session metadata, and extracting
+    the track outline all happen INSIDE the feeder thread — this call
+    is effectively instant, so HTTP handlers that kick off a replay
+    session can return a session_id to the client without blocking on
+    fastf1's ~60 s data load.
 
     `state` is the LiveState instance the replay should write into. Omit
     to use the global STATE (boot-time env-var replay). Per-client
     replay sessions pass their own LiveState so each client's replay
     is isolated from everyone else's and from the global live feed.
-
-    Raises FileNotFoundError if `path` doesn't exist.
     """
-    header, records = _load(path)
-    if not records:
-        raise RuntimeError(f"no records found in {path}")
-    _log.info("replay loaded: %s (%d records, %.0f sec)",
-              header.get("event_name"), len(records), records[-1]["t_sec"])
-
-    _prime_session(header, state=state)
+    # Cheap existence check so an obviously-bad path fails fast in the
+    # caller (the HTTP handler) rather than silently in the feeder thread.
+    import os
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
 
     stop_evt = threading.Event()
     t = threading.Thread(
         target=_feed,
-        args=(records, speed, loop, stop_evt),
+        args=(path, speed, loop, stop_evt),
         kwargs={"state": state},
         name="pitvisor-replay",
         daemon=True,
