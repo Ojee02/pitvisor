@@ -30,6 +30,18 @@ Knobs (see live/config.py for the full list):
 import logging
 import os
 
+# Pre-warm numpy + pandas + fastf1 on the main thread BEFORE any replay
+# feeder thread can run. Without this, numpy's lazy __getattr__ hits an
+# infinite-recursion bug when `import numpy.rec as rec` is triggered
+# from a worker thread (the classic numpy 2.x threading race). Touching
+# numpy.rec here forces numpy's deferred loader to resolve it once, on
+# the main thread, so every subsequent access is a plain attribute read.
+import numpy  # noqa: F401,E402
+import numpy.rec  # noqa: F401,E402 — this is the specific submodule that deadlocks
+import numpy.core  # noqa: F401,E402
+import pandas  # noqa: F401,E402
+import fastf1  # noqa: F401,E402
+
 from live import config
 from live.server import create_app
 

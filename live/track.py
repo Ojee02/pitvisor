@@ -35,13 +35,15 @@ def extract_outline(year: int, round_or_name) -> Optional[dict]:
     try:
         session = fastf1.get_session(year, round_or_name, "R")
     except Exception as exc:
-        _log.debug("get_session failed: %s", exc)
+        _log.warning("extract_outline: get_session(%s, %s) failed: %s", year, round_or_name, exc)
         return None
 
     try:
+        _log.info("extract_outline: loading fastf1 data for %s %s", year, round_or_name)
         session.load(telemetry=True, laps=True, weather=False, messages=False)
+        _log.info("extract_outline: fastf1 load complete")
     except Exception as exc:
-        _log.debug("session.load failed: %s", exc)
+        _log.warning("extract_outline: session.load(%s, %s) failed: %s", year, round_or_name, exc)
         return None
 
     try:

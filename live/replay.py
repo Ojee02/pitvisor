@@ -153,6 +153,7 @@ def _feed(path: str, speed: float, loop: bool, stop_evt: threading.Event, state=
     # sessions pass their own LiveState instance).
     target = state if state is not None else STATE
     parse.bind_state(target)
+    _log.info("feeder thread started: state_id=%s path=%s", id(target), path)
 
     # Load + prime here, on the feeder thread, so the caller never blocks.
     try:
@@ -167,10 +168,12 @@ def _feed(path: str, speed: float, loop: bool, stop_evt: threading.Event, state=
         return
     _log.info("replay loaded: %s (%d records, %.0f sec)",
               header.get("event_name"), len(records), records[-1]["t_sec"])
+    _log.info("feeder: calling _prime_session")
     try:
         _prime_session(header, state=target)
     except Exception:
         _log.exception("_prime_session failed")
+    _log.info("feeder: _prime_session returned, entering feed loop")
 
     seek_index, seek_t = _find_seek_offset(records)
     if seek_index > 0:

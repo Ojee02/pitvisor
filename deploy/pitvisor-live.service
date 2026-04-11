@@ -35,10 +35,15 @@ ExecStart=/home/disinteg/pitvisor/venv/bin/gunicorn \
 Restart=always
 RestartSec=5
 
-# Resource limits to coexist with MC server and main pitvisor backend
-CPUQuota=40%
-MemoryMax=1G
-MemoryHigh=768M
+# Resource limits to coexist with MC server and main pitvisor backend.
+# Replay sessions hold a per-session LiveState (~20 MB) plus the full
+# parsed records list during loading (~800 MB per 100 MB JSONL), so the
+# old 768 MB/1 GB ceiling throttled the feeder thread and made load()
+# take 10+ minutes. Raised to comfortable levels for a few concurrent
+# replay sessions.
+CPUQuota=60%
+MemoryMax=5G
+MemoryHigh=4G
 
 [Install]
 WantedBy=multi-user.target
