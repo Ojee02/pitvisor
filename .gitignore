@@ -10,3 +10,10 @@ data_dump/
 .env
 
 cert/
+
+# live service dev
+.venv/
+venv/
+recordings/
+*.jsonl
+fastf1_cache/

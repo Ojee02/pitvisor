@@ -34,9 +34,29 @@ TEL_INTERVAL = config.TEL_INTERVAL
 KEEPALIVE_INTERVAL = config.KEEPALIVE_INTERVAL
 
 
+class _StripLivePrefix:
+    """WSGI middleware that transparently strips a leading ``/live`` from the
+    request path. Lets the same Flask routes work both behind the production
+    nginx rewrite (which already strips ``/live/`` before proxying) and in
+    local dev (where the browser hits the backend directly and keeps the
+    ``/live`` prefix). No-op for paths that don't start with ``/live``."""
+
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        path = environ.get("PATH_INFO", "")
+        if path == "/live" or path == "/live/":
+            environ["PATH_INFO"] = "/"
+        elif path.startswith("/live/"):
+            environ["PATH_INFO"] = path[len("/live"):]
+        return self.app(environ, start_response)
+
+
 def create_app(cache_dir: str | None = None) -> Flask:
     app = Flask(__name__)
     CORS(app, resources={r"/*": {"origins": "*"}})
+    app.wsgi_app = _StripLivePrefix(app.wsgi_app)
 
     # kick off the background worker
     WORKER.start()
