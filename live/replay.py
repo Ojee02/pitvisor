@@ -140,14 +140,28 @@ def _find_seek_offset(records: list[dict]) -> tuple[int, float]:
     return 0, 0.0
 
 
-def _feed(path: str, speed: float, loop: bool, stop_evt: threading.Event, state=None):
+def _feed(
+    path: str,
+    loop: bool,
+    stop_evt: threading.Event,
+    state=None,
+    speed_ref=None,
+    pause_evt: Optional[threading.Event] = None,
+    seek_ref=None,
+    on_loaded=None,
+):
     """Feeder thread: loads the recording, primes the session metadata
     and track outline, then pumps records through the parse pipeline.
 
-    Loading + priming runs INSIDE this thread (not in the HTTP handler
-    that spawned us) so starting a per-client replay returns to the
-    caller immediately and only the first few hundred ms of the
-    feeder's timeline get lost to warm-up work."""
+    speed_ref is a single-element list [speed] that the thread reads on
+    each record, so the HTTP handlers can change speed mid-session by
+    mutating speed_ref[0] atomically.
+    pause_evt is set externally to pause playback mid-session.
+    seek_ref is a single-element list [t_sec or None]; the thread
+    checks it once per record and if set, jumps iteration to that
+    session-time.
+    on_loaded(duration_sec) is called once after _load() completes so
+    the session object can expose duration to HTTP clients."""
     # Bind the replay thread's parse context to the target state (defaults
     # to global STATE for boot-time env-var replay; per-client replay
     # sessions pass their own LiveState instance).
@@ -158,7 +172,7 @@ def _feed(path: str, speed: float, loop: bool, stop_evt: threading.Event, state=
     # Load + prime here, on the feeder thread, so the caller never blocks.
     try:
         header, records = _load(path)
-    except Exception as exc:
+    except Exception:
         _log.exception("replay load failed for %s", path)
         target.mark_active(False)
         return
@@ -166,8 +180,14 @@ def _feed(path: str, speed: float, loop: bool, stop_evt: threading.Event, state=
         _log.warning("replay %s has no records", path)
         target.mark_active(False)
         return
+    duration = float(records[-1]["t_sec"])
     _log.info("replay loaded: %s (%d records, %.0f sec)",
-              header.get("event_name"), len(records), records[-1]["t_sec"])
+              header.get("event_name"), len(records), duration)
+    if on_loaded is not None:
+        try:
+            on_loaded(duration)
+        except Exception:
+            pass
     _log.info("feeder: calling _prime_session")
     try:
         _prime_session(header, state=target)
@@ -175,49 +195,120 @@ def _feed(path: str, speed: float, loop: bool, stop_evt: threading.Event, state=
         _log.exception("_prime_session failed")
     _log.info("feeder: _prime_session returned, entering feed loop")
 
-    seek_index, seek_t = _find_seek_offset(records)
-    if seek_index > 0:
+    default_seek_index, default_seek_t = _find_seek_offset(records)
+    if default_seek_index > 0:
         _log.info(
             "replay seek: fast-forwarding %d records (%.0fs session time) to build initial state",
-            seek_index, seek_t,
+            default_seek_index, default_seek_t,
         )
 
-    while not stop_evt.is_set():
-        wall_start = None
+    def _speed():
+        return speed_ref[0] if speed_ref else 10.0
 
-        for i, rec in enumerate(records):
+    def _find_index_for_t(t_target):
+        lo, hi = 0, len(records)
+        while lo < hi:
+            mid = (lo + hi) >> 1
+            if records[mid]["t_sec"] < t_target:
+                lo = mid + 1
+            else:
+                hi = mid
+        return max(0, min(lo, len(records) - 1))
+
+    while not stop_evt.is_set():
+        seek_index = default_seek_index
+        seek_t = default_seek_t
+        wall_start = None
+        start_t = seek_t
+
+        i = 0
+        while i < len(records):
             if stop_evt.is_set():
                 return
 
+            # Apply a pending seek request atomically.
+            if seek_ref is not None and seek_ref[0] is not None:
+                requested = seek_ref[0]
+                seek_ref[0] = None
+                new_i = _find_index_for_t(float(requested))
+                # Clear state so stale driver/position data from BEFORE the
+                # seek target doesn't linger visually.
+                target.reset()
+                target.mark_active(True)
+                try:
+                    _prime_session(header, state=target)
+                except Exception:
+                    _log.exception("_prime_session failed during seek")
+                # Fast-forward from index 0 up to the new target so
+                # DriverList (which arrives early in the file, typically
+                # well before the default seek_index) and every other
+                # pre-target event gets dispatched and the state is
+                # fully rebuilt as-of the seek target.
+                for j in range(0, new_i):
+                    try:
+                        parse.dispatch(records[j]["topic"], records[j]["payload"])
+                    except Exception:
+                        _log.exception("dispatch failed on %s", records[j].get("topic"))
+                i = new_i
+                start_t = records[new_i]["t_sec"] if new_i < len(records) else 0.0
+                wall_start = time.time()
+                _log.info("replay: seeked to t=%.0fs (record %d)", start_t, new_i)
+                continue
+
+            rec = records[i]
+
+            # Honor pause events. Block on a short wait so stop_evt /
+            # seek_ref / speed changes still respond quickly.
+            if pause_evt is not None and pause_evt.is_set():
+                while pause_evt.is_set() and not stop_evt.is_set():
+                    if seek_ref is not None and seek_ref[0] is not None:
+                        break
+                    time.sleep(0.1)
+                # Reset wall_start so the pace pick-up is smooth after resume
+                if wall_start is not None:
+                    wall_start = None
+                continue
+
             if i < seek_index:
-                # Fast-forward: dispatch without pacing or sleeping so we
-                # prime DriverList, TrackStatus, WeatherData, initial
-                # positions, etc. before real-time playback kicks in.
+                # Fast-forward phase (pre-session dead time)
                 try:
                     parse.dispatch(rec["topic"], rec["payload"])
                 except Exception:
                     _log.exception("dispatch failed on %s", rec.get("topic"))
+                i += 1
                 continue
 
             if wall_start is None:
                 wall_start = time.time()
-                _log.info("replay: real-time playback starting at t=%.0fs", rec["t_sec"])
+                start_t = rec["t_sec"]
+                _log.info("replay: real-time playback starting at t=%.0fs", start_t)
 
-            if speed > 0:
-                elapsed_rel = (rec["t_sec"] - seek_t) / speed
+            spd = _speed()
+            if spd > 0:
+                elapsed_rel = (rec["t_sec"] - start_t) / spd
                 elapsed_wall = time.time() - wall_start
                 if elapsed_rel > elapsed_wall:
-                    # sleep in small chunks so stop_evt is responsive
                     sleep_s = elapsed_rel - elapsed_wall
                     while sleep_s > 0 and not stop_evt.is_set():
+                        # Bail out of the sleep if a pause/seek/speed
+                        # change arrives so we respond responsively.
+                        if pause_evt is not None and pause_evt.is_set():
+                            break
+                        if seek_ref is not None and seek_ref[0] is not None:
+                            break
                         step = min(sleep_s, 0.2)
                         time.sleep(step)
                         sleep_s -= step
-            target.set_elapsed(rec["t_sec"] - seek_t)
+                    if (pause_evt is not None and pause_evt.is_set()) or (
+                        seek_ref is not None and seek_ref[0] is not None
+                    ):
+                        continue
+            target.set_elapsed(rec["t_sec"] - start_t)
             try:
                 parse.dispatch(rec["topic"], rec["payload"])
             except Exception:
                 _log.exception("dispatch failed on %s", rec.get("topic"))
+            i += 1
 
         _log.info("replay timeline complete")
         if not loop:
@@ -226,7 +317,16 @@ def _feed(path: str, speed: float, loop: bool, stop_evt: threading.Event, state=
         _log.info("looping replay")
 
 
-def start_replay(path: str, speed: float = 10.0, loop: bool = False, state=None) -> threading.Thread:
+def start_replay(
+    path: str,
+    speed: float = 10.0,
+    loop: bool = False,
+    state=None,
+    speed_ref=None,
+    pause_evt: Optional[threading.Event] = None,
+    seek_ref=None,
+    on_loaded=None,
+) -> threading.Thread:
     """Spawn a background feeder thread for `path` and return immediately.
 
     Loading the recording, priming the session metadata, and extracting
@@ -235,22 +335,31 @@ def start_replay(path: str, speed: float = 10.0, loop: bool = False, state=None)
     session can return a session_id to the client without blocking on
     fastf1's ~60 s data load.
 
-    `state` is the LiveState instance the replay should write into. Omit
-    to use the global STATE (boot-time env-var replay). Per-client
-    replay sessions pass their own LiveState so each client's replay
-    is isolated from everyone else's and from the global live feed.
+    Accepts either a fixed `speed` value (legacy path, used by env-var
+    boot-time replay) or a `speed_ref` list-of-one that the feeder
+    re-reads per record so HTTP clients can change speed at runtime.
+    `pause_evt` and `seek_ref` are optional threading primitives for
+    pause/resume and seek control. `on_loaded(duration_sec)` is called
+    once after _load completes.
     """
-    # Cheap existence check so an obviously-bad path fails fast in the
-    # caller (the HTTP handler) rather than silently in the feeder thread.
     import os
     if not os.path.isfile(path):
         raise FileNotFoundError(path)
 
+    if speed_ref is None:
+        speed_ref = [float(speed)]
+
     stop_evt = threading.Event()
     t = threading.Thread(
         target=_feed,
-        args=(path, speed, loop, stop_evt),
-        kwargs={"state": state},
+        args=(path, loop, stop_evt),
+        kwargs={
+            "state": state,
+            "speed_ref": speed_ref,
+            "pause_evt": pause_evt,
+            "seek_ref": seek_ref,
+            "on_loaded": on_loaded,
+        },
         name="pitvisor-replay",
         daemon=True,
     )

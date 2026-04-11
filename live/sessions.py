@@ -27,7 +27,6 @@ class ReplaySession:
     def __init__(self, session_id: str, file_path: str, speed: float, loop: bool):
         self.id = session_id
         self.file_path = file_path
-        self.speed = speed
         self.loop = loop
         self.created_at = time.time()
         self.last_touched = time.time()
@@ -46,13 +45,62 @@ class ReplaySession:
             "Key": None,
             "StartDate": None,
         })
+        # Mutable control slots read by the feeder thread every record.
+        # Speed is a list so we can swap its first element atomically.
+        self._speed = [float(speed)]
+        self._pause_evt = threading.Event()
+        self._seek_request = [None]  # Optional[float] t_sec to jump to
+        self._duration_sec = 0.0     # set by the feeder once _load completes
         self._thread: Optional[threading.Thread] = None
         self._stop_evt: Optional[threading.Event] = None
+
+    # Read-only properties that reflect the live control state
+    @property
+    def speed(self) -> float:
+        return self._speed[0]
+
+    @property
+    def paused(self) -> bool:
+        return self._pause_evt.is_set()
+
+    @property
+    def duration_sec(self) -> float:
+        return self._duration_sec
+
+    # Mutators called from HTTP handlers
+    def set_speed(self, speed: float):
+        try:
+            v = float(speed)
+        except (TypeError, ValueError):
+            return
+        if v <= 0:
+            return
+        self._speed[0] = v
+
+    def pause(self):
+        self._pause_evt.set()
+
+    def resume(self):
+        self._pause_evt.clear()
+
+    def seek(self, t_sec: float):
+        try:
+            self._seek_request[0] = float(t_sec)
+        except (TypeError, ValueError):
+            pass
 
     def start(self):
         # Deferred import so sessions.py doesn't circular-import with replay
         from .replay import start_replay
-        t = start_replay(self.file_path, speed=self.speed, loop=self.loop, state=self.state)
+        t = start_replay(
+            self.file_path,
+            speed_ref=self._speed,
+            loop=self.loop,
+            state=self.state,
+            pause_evt=self._pause_evt,
+            seek_ref=self._seek_request,
+            on_loaded=lambda d: setattr(self, "_duration_sec", d),
+        )
         self._thread = t
         self._stop_evt = getattr(t, "_stop_evt", None)
 
@@ -79,6 +127,8 @@ class ReplaySession:
             "file": self.file_path.split("/")[-1],
             "speed": self.speed,
             "loop": self.loop,
+            "paused": self.paused,
+            "duration_sec": self.duration_sec,
             "created_at": self.created_at,
             "last_touched": self.last_touched,
             "alive": bool(self._thread and self._thread.is_alive()),

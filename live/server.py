@@ -434,6 +434,53 @@ def create_app(cache_dir: str | None = None) -> Flask:
     def replay_session_list():
         return jsonify({"sessions": REPLAY_REGISTRY.list()}), 200
 
+    # ── replay session playback controls ─────────────────────────────
+    @app.route("/replays/session/<sid>/pause", methods=["POST"])
+    def replay_session_pause(sid):
+        sess = REPLAY_REGISTRY.get(sid)
+        if not sess:
+            return jsonify({"error": "not found"}), 404
+        sess.pause()
+        return jsonify({"status": "ok", "paused": True}), 200
+
+    @app.route("/replays/session/<sid>/resume", methods=["POST"])
+    def replay_session_resume(sid):
+        sess = REPLAY_REGISTRY.get(sid)
+        if not sess:
+            return jsonify({"error": "not found"}), 404
+        sess.resume()
+        return jsonify({"status": "ok", "paused": False}), 200
+
+    @app.route("/replays/session/<sid>/speed", methods=["POST"])
+    def replay_session_speed(sid):
+        sess = REPLAY_REGISTRY.get(sid)
+        if not sess:
+            return jsonify({"error": "not found"}), 404
+        try:
+            body = request.get_json(force=True) or {}
+        except Exception:
+            body = {}
+        speed = body.get("speed")
+        if speed is None:
+            return jsonify({"error": "speed required"}), 400
+        sess.set_speed(speed)
+        return jsonify({"status": "ok", "speed": sess.speed}), 200
+
+    @app.route("/replays/session/<sid>/seek", methods=["POST"])
+    def replay_session_seek(sid):
+        sess = REPLAY_REGISTRY.get(sid)
+        if not sess:
+            return jsonify({"error": "not found"}), 404
+        try:
+            body = request.get_json(force=True) or {}
+        except Exception:
+            body = {}
+        t_sec = body.get("t_sec")
+        if t_sec is None:
+            return jsonify({"error": "t_sec required"}), 400
+        sess.seek(t_sec)
+        return jsonify({"status": "ok", "t_sec": float(t_sec)}), 200
+
     # ── SSE streams ─────────────────────────────────────────────────────
 
     @app.route("/stream", methods=["GET"])
