@@ -109,6 +109,7 @@ def _feed(records: list[dict], speed: float, loop: bool, stop_evt: threading.Eve
                         step = min(sleep_s, 0.2)
                         time.sleep(step)
                         sleep_s -= step
+            STATE.set_elapsed(rec["t_sec"] - first_t)
             try:
                 parse.dispatch(rec["topic"], rec["payload"])
             except Exception:

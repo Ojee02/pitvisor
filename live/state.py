@@ -16,6 +16,8 @@ from typing import Any
 
 from . import config
 
+_REPLAY_ACTIVE = bool(config.REPLAY_FILE)
+
 TEL_BUFFER_LEN = config.TEL_BUFFER_LEN
 
 
@@ -42,6 +44,7 @@ class LiveState:
                 "lap": None,
                 "total_laps": None,
                 "clock_remaining": None,
+                "elapsed_sec": 0.0,    # session-time elapsed since start (for replay or real)
                 "track_rotation": None,
                 "track_outline": None,  # list of [x, y] pairs
                 "corners": None,        # list of {number, x, y}
@@ -57,6 +60,8 @@ class LiveState:
     def mark_active(self, active: bool):
         with self._lock:
             self.session["active"] = active
+            if active:
+                self.session["_started_wall"] = time.time()
             self.session["updated_at"] = time.time()
 
     # ── session-level setters ────────────────────────────────────────────
@@ -96,6 +101,13 @@ class LiveState:
         with self._lock:
             if remaining is not None:
                 self.session["clock_remaining"] = remaining
+
+    def set_elapsed(self, elapsed_sec: float):
+        """Set session-time elapsed since start. Called by the replay feeder
+        on every record and can be called from the live SignalR client too
+        to track session time independently of wall clock."""
+        with self._lock:
+            self.session["elapsed_sec"] = float(elapsed_sec)
 
     def set_track_status(self, status: str, message: str):
         with self._lock:
@@ -166,13 +178,25 @@ class LiveState:
         """Return a deep-copied, JSON-safe state snapshot for SSE clients.
         Excludes per-driver telemetry buffers (use telemetry() for those)."""
         with self._lock:
+            # Auto-update session elapsed time from wall clock when we're
+            # running against a real feed. In replay mode the feeder writes
+            # elapsed_sec directly from each record's t_sec so we don't touch
+            # it here.
+            if not _REPLAY_ACTIVE:
+                started = self.session.get("_started_wall")
+                if self.session.get("active") and started is not None:
+                    self.session["elapsed_sec"] = time.time() - started
+
+            sess = copy.deepcopy(self.session)
+            sess.pop("_started_wall", None)
+
             drivers = []
             for num, d in self.drivers.items():
                 drivers.append(copy.deepcopy(d))
             # sort by position when available, then by number
             drivers.sort(key=lambda x: (x.get("position") or 99, int(x.get("number") or 99)))
             return {
-                "session": copy.deepcopy(self.session),
+                "session": sess,
                 "track_status": dict(self.track_status),
                 "weather": copy.deepcopy(self.weather),
                 "race_control": copy.deepcopy(self.race_control[-15:]),
