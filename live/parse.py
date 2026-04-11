@@ -63,6 +63,15 @@ def _merge_dict_stream(payload: Any) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _is_driver_num(key: Any) -> bool:
+    """True if a key from a TimingData / DriverList / TimingApp payload
+    looks like an actual driver number. Filters out payload metadata
+    keys like `_kf`, `Lines`, `Withheld`, `SessionPart` that occasionally
+    slip in via delta payloads and would otherwise be processed as a
+    driver, eventually crashing snapshot() when it tries to int() them."""
+    return isinstance(key, str) and key.isdigit()
+
+
 def _iso_to_ms(ts: Any) -> int | None:
     """Convert an ISO 8601 timestamp string (with or without trailing 'Z',
     with or without fractional seconds) to milliseconds since the Unix
@@ -172,7 +181,7 @@ def on_driver_list(payload: Any):
     # dict keyed by driver number. Can be either a full snapshot or a partial
     # update with just a few drivers changing. Merge driver-by-driver.
     for num, info in d.items():
-        if num == "_kf" or not isinstance(info, dict):
+        if not _is_driver_num(num) or not isinstance(info, dict):
             continue
         team_colour = info.get("TeamColour")
         color = f"#{team_colour}" if team_colour else None
@@ -197,11 +206,11 @@ def on_timing_data(payload: Any):
                                   InPit, PitOut, Status, Retired, Stopped, ...}}}
     """
     d = _merge_dict_stream(payload)
-    lines = d.get("Lines") or d
+    lines = d.get("Lines")
     if not isinstance(lines, dict):
         return
     for num, info in lines.items():
-        if num == "_kf" or not isinstance(info, dict):
+        if not _is_driver_num(num) or not isinstance(info, dict):
             continue
 
         patch: dict = {}
@@ -266,7 +275,7 @@ def on_timing_app_data(payload: Any):
     d = _merge_dict_stream(payload)
     lines = d.get("Lines") or {}
     for num, info in lines.items():
-        if num == "_kf" or not isinstance(info, dict):
+        if not _is_driver_num(num) or not isinstance(info, dict):
             continue
         stints = info.get("Stints")
         if stints:
@@ -290,7 +299,7 @@ def on_timing_stats(payload: Any):
     d = _merge_dict_stream(payload)
     lines = d.get("Lines") or {}
     for num, info in lines.items():
-        if num == "_kf" or not isinstance(info, dict):
+        if not _is_driver_num(num) or not isinstance(info, dict):
             continue
         pb = info.get("PersonalBestLapTime")
         if isinstance(pb, dict) and pb.get("Value"):

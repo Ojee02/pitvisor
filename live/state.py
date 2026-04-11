@@ -220,17 +220,23 @@ class LiveState:
 
             drivers = []
             for num, d in self.drivers.items():
+                # Skip entries that slipped in with a non-numeric number —
+                # shouldn't happen after the parse.py fix, but we don't want
+                # any future regression to blow up the entire SSE stream.
+                if not (isinstance(num, str) and num.isdigit()):
+                    continue
                 drv = copy.deepcopy(d)
-                # Attach recent position history so the frontend can drive a
-                # smooth interpolation buffer. Bounded to POS_BUFFER_LEN
-                # samples (≈10s of history at 3Hz) so the snapshot payload
-                # stays small.
                 pbuf = self._pos.get(num)
                 if pbuf:
                     drv["pos_history"] = list(pbuf)
                 drivers.append(drv)
-            # sort by position when available, then by number
-            drivers.sort(key=lambda x: (x.get("position") or 99, int(x.get("number") or 99)))
+            # sort by position when available, then by driver number
+            def _sort_key(x):
+                pos = x.get("position") or 99
+                n = x.get("number") or ""
+                num_val = int(n) if isinstance(n, str) and n.isdigit() else 99
+                return (pos, num_val)
+            drivers.sort(key=_sort_key)
             return {
                 "session": sess,
                 "track_status": dict(self.track_status),
