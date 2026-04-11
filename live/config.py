@@ -107,6 +107,16 @@ REPLAY_SPEED = _f("PITVISOR_LIVE_REPLAY_SPEED", 10.0)
 # Loop the replay back to the start when it ends.
 REPLAY_LOOP = _b("PITVISOR_LIVE_REPLAY_LOOP", False)
 
+# Skip the first N seconds of the recording (session time). F1 recordings
+# include ~20-30 min of pre-session activity (installation laps, formation,
+# grid line-up) before the race actually starts — at 1× replay speed that
+# looks like the page is frozen. Set this to jump past it.
+REPLAY_SEEK_SEC = _f("PITVISOR_LIVE_REPLAY_SEEK_SEC", 0.0)
+
+# If true, automatically skip ahead to the first record where SessionStatus
+# becomes "Started" (green flag). Overrides REPLAY_SEEK_SEC if that's 0.
+REPLAY_SKIP_TO_START = _b("PITVISOR_LIVE_REPLAY_SKIP_TO_START", True)
+
 
 def describe() -> dict:
     """Return a dict summary of the current effective config. Used by
@@ -126,4 +136,6 @@ def describe() -> dict:
         "replay_file": REPLAY_FILE,
         "replay_speed": REPLAY_SPEED,
         "replay_loop": REPLAY_LOOP,
+        "replay_seek_sec": REPLAY_SEEK_SEC,
+        "replay_skip_to_start": REPLAY_SKIP_TO_START,
     }
