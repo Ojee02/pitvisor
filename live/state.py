@@ -31,7 +31,15 @@ class LiveState:
         self._tel: dict[str, deque] = {}          # driver number -> deque of samples
         self._tel_seq: dict[str, int] = {}        # driver number -> monotonic seq
         self._pos: dict[str, deque] = {}          # driver number -> deque of {t, x, y}
+        # When True, snapshot() will NOT overwrite elapsed_sec from the
+        # wall clock — the replay feeder thread writes it from each
+        # record's t_sec instead so the seek bar reflects the actual
+        # position in the recorded timeline.
+        self._is_replay = False
         self.reset()
+
+    def mark_replay(self, is_replay: bool = True):
+        self._is_replay = bool(is_replay)
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
@@ -207,10 +215,11 @@ class LiveState:
         Excludes per-driver telemetry buffers (use telemetry() for those)."""
         with self._lock:
             # Auto-update session elapsed time from wall clock when we're
-            # running against a real feed. In replay mode the feeder writes
-            # elapsed_sec directly from each record's t_sec so we don't touch
-            # it here.
-            if not _REPLAY_ACTIVE:
+            # running against a real feed. In replay mode (either the
+            # global env-var replay OR a per-client replay session) the
+            # feeder thread writes elapsed_sec directly from each
+            # record's t_sec so we must NOT overwrite it here.
+            if not _REPLAY_ACTIVE and not self._is_replay:
                 started = self.session.get("_started_wall")
                 if self.session.get("active") and started is not None:
                     self.session["elapsed_sec"] = time.time() - started

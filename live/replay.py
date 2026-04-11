@@ -252,6 +252,10 @@ def _feed(
                 i = new_i
                 start_t = records[new_i]["t_sec"] if new_i < len(records) else 0.0
                 wall_start = time.time()
+                # Write the new elapsed position immediately so the
+                # frontend's seek bar jumps to the correct spot even
+                # before the first post-seek record is dispatched.
+                target.set_elapsed(start_t)
                 _log.info("replay: seeked to t=%.0fs (record %d)", start_t, new_i)
                 continue
 
@@ -275,6 +279,7 @@ def _feed(
                     parse.dispatch(rec["topic"], rec["payload"])
                 except Exception:
                     _log.exception("dispatch failed on %s", rec.get("topic"))
+                target.set_elapsed(rec["t_sec"])
                 i += 1
                 continue
 
@@ -303,7 +308,11 @@ def _feed(
                         seek_ref is not None and seek_ref[0] is not None
                     ):
                         continue
-            target.set_elapsed(rec["t_sec"] - start_t)
+            # Report absolute session t_sec as elapsed so the frontend
+            # seek bar's `elapsed / duration` ratio reflects the actual
+            # position in the full timeline (not the time since playback
+            # started — that would reset to 0 on every seek).
+            target.set_elapsed(rec["t_sec"])
             try:
                 parse.dispatch(rec["topic"], rec["payload"])
             except Exception:

@@ -10,6 +10,8 @@ A session is cleaned up automatically if no SSE subscriber has touched
 it in SESSION_IDLE_TIMEOUT seconds (defaults to 10 min). SSE handlers
 call `touch()` on every iteration to keep their session alive.
 """
+import gzip
+import json
 import logging
 import secrets
 import threading
@@ -23,6 +25,25 @@ _log = logging.getLogger("pitvisor.live.sessions")
 SESSION_IDLE_TIMEOUT = 600.0  # seconds
 
 
+def _peek_duration(path: str) -> float:
+    """Read just the header line of a recording to get its total duration.
+    This is fast (one line from a gzipped file) and lets the frontend
+    render a usable seek bar the instant the session is created, instead
+    of waiting for the feeder thread to finish loading the whole file."""
+    try:
+        opener = gzip.open if path.endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8") as f:
+            first = f.readline().strip()
+        if not first:
+            return 0.0
+        header = json.loads(first)
+        if header.get("__header__"):
+            return float(header.get("duration_sec") or 0.0)
+    except Exception as exc:
+        _log.warning("could not peek duration for %s: %s", path, exc)
+    return 0.0
+
+
 class ReplaySession:
     def __init__(self, session_id: str, file_path: str, speed: float, loop: bool):
         self.id = session_id
@@ -31,6 +52,9 @@ class ReplaySession:
         self.created_at = time.time()
         self.last_touched = time.time()
         self.state = LiveState()
+        # Flag so snapshot() knows not to overwrite elapsed_sec with wall
+        # clock — the feeder thread writes it from each record's t_sec.
+        self.state.mark_replay(True)
         # Mark the state active + seed a placeholder session name from the
         # filename so the frontend renders the live view (not the offline
         # "no live session" screen) during the ~60s of fastf1 data loading
@@ -50,7 +74,11 @@ class ReplaySession:
         self._speed = [float(speed)]
         self._pause_evt = threading.Event()
         self._seek_request = [None]  # Optional[float] t_sec to jump to
-        self._duration_sec = 0.0     # set by the feeder once _load completes
+        # Read duration from the header up-front so the seek bar is
+        # usable immediately. The feeder thread will overwrite this with
+        # the authoritative last-record timestamp once _load() finishes,
+        # but the two values match to within a few records.
+        self._duration_sec = _peek_duration(file_path)
         self._thread: Optional[threading.Thread] = None
         self._stop_evt: Optional[threading.Event] = None
 
