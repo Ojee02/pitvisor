@@ -162,6 +162,16 @@ class LiveState:
             if status is not None:
                 cur["pos_status"] = status
 
+    def clear_sample_buffers(self):
+        """Wipe the per-driver telemetry and position sample buffers.
+        Called by the replay feeder when it wraps around a loop — without
+        this, timestamps from the new iteration would fall behind those
+        already in the buffers and cause out-of-order samples."""
+        with self._lock:
+            self._tel.clear()
+            self._tel_seq.clear()
+            self._pos.clear()
+
     def append_driver_position_sample(self, number: str, t_ms: int, x: float, y: float, status: str | None = None):
         """Append a timestamped position sample to the driver's rolling
         buffer. Used by Position.z which sends multiple samples per message

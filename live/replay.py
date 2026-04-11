@@ -176,6 +176,13 @@ def _feed(records: list[dict], speed: float, loop: bool, stop_evt: threading.Eve
             STATE.mark_active(False)
             return
         _log.info("looping replay")
+        # Clear per-driver sample buffers so that when the next iteration
+        # starts dispatching records with the ORIGINAL F1 timestamps
+        # (i.e. timestamps LOWER than what the buffer just saw at the end
+        # of the previous iteration), we don't end up with out-of-order
+        # samples in the deque. Without this, the frontend sees a brief
+        # period of stale end-of-race positions on every loop.
+        STATE.clear_sample_buffers()
 
 
 def start_replay(path: str, speed: float = 10.0, loop: bool = False) -> threading.Thread:
