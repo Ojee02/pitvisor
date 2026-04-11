@@ -32,6 +32,20 @@ class ReplaySession:
         self.created_at = time.time()
         self.last_touched = time.time()
         self.state = LiveState()
+        # Mark the state active + seed a placeholder session name from the
+        # filename so the frontend renders the live view (not the offline
+        # "no live session" screen) during the ~60s of fastf1 data loading
+        # the feeder thread does before the real metadata is available.
+        self.state.mark_active(True)
+        fname = file_path.rsplit("/", 1)[-1]
+        display = fname.replace(".jsonl.gz", "").replace(".jsonl", "").replace("_", " ")
+        self.state.set_session_info({
+            "Name": display,
+            "Type": "Replay",
+            "Meeting": {"OfficialName": display, "Number": 0},
+            "Key": None,
+            "StartDate": None,
+        })
         self._thread: Optional[threading.Thread] = None
         self._stop_evt: Optional[threading.Event] = None
 
