@@ -22,15 +22,16 @@ import pandas as pd
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 
+from . import config
 from .state import STATE
 from .worker import WORKER
 
 _log = logging.getLogger("pitvisor.live.server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-STREAM_INTERVAL = 1.0       # seconds between full snapshot pushes
-TEL_INTERVAL = 0.25         # seconds between telemetry pushes (4 Hz)
-KEEPALIVE_INTERVAL = 15.0   # SSE comment ping to keep proxies happy
+STREAM_INTERVAL = config.STREAM_INTERVAL
+TEL_INTERVAL = config.TEL_INTERVAL
+KEEPALIVE_INTERVAL = config.KEEPALIVE_INTERVAL
 
 
 def create_app(cache_dir: str | None = None) -> Flask:
@@ -45,6 +46,10 @@ def create_app(cache_dir: str | None = None) -> Flask:
     @app.route("/health", methods=["GET"])
     def health():
         return jsonify(status="UP", live_active=STATE.session.get("active", False)), 200
+
+    @app.route("/config", methods=["GET"])
+    def config_dump():
+        return jsonify(config.describe()), 200
 
     @app.route("/status", methods=["GET"])
     def status():

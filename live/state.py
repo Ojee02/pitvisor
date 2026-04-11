@@ -14,8 +14,9 @@ import time
 from collections import deque
 from typing import Any
 
-# keep at most this many telemetry samples per driver (~60s at 3 Hz)
-TEL_BUFFER_LEN = 180
+from . import config
+
+TEL_BUFFER_LEN = config.TEL_BUFFER_LEN
 
 
 class LiveState:
@@ -118,8 +119,7 @@ class LiveState:
             for m in messages:
                 if m not in self.race_control:
                     self.race_control.append(m)
-            # keep latest 50
-            self.race_control = self.race_control[-50:]
+            self.race_control = self.race_control[-config.RACE_CONTROL_KEEP:]
 
     # ── driver-level setters ─────────────────────────────────────────────
 

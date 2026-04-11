@@ -2,16 +2,17 @@
 
 Runs in the background for the lifetime of the live service. Every minute it
 checks the FastF1 event schedule for the current year and decides whether a
-session is "live". A session is live from 15 minutes before its scheduled
-start to 3 hours after (or to the scheduled start of the next session, if
-that's sooner — mostly matters for Saturday P3 → Quali transitions).
+session is "live" (start-PRE_WINDOW to start+POST_WINDOW).
 
 During a live window:
   • extract the track outline from the cache (once per session)
   • construct a LiveClient and call .start() on a child thread
-  • wait for the window to close, then stop the client
+  • if the child thread dies before the window closes, restart it
+  • when the window closes, stop the client
 
-Outside any live window the worker sleeps.
+If PITVISOR_LIVE_REPLAY is set, the scheduler is bypassed entirely and the
+named file is fed through the same parse pipeline via live.replay — useful
+for testing the UI between race weekends without waiting for a real session.
 """
 import datetime as dt
 import logging
@@ -23,20 +24,20 @@ from typing import Optional
 import fastf1
 import pandas as pd
 
+from . import config
 from .state import STATE
 from .track import extract_outline
 from .client import LiveClient
 
 _log = logging.getLogger("pitvisor.live.worker")
 
-PRE_WINDOW = dt.timedelta(minutes=15)
-POST_WINDOW = dt.timedelta(hours=3)
-POLL_INTERVAL = 60  # seconds between schedule checks when idle
-CLIENT_TIMEOUT = 120  # seconds of silence before SignalR client exits
+PRE_WINDOW = dt.timedelta(minutes=config.PRE_WINDOW_MINUTES)
+POST_WINDOW = dt.timedelta(hours=config.POST_WINDOW_HOURS)
 
 
 class LiveWorker:
     def __init__(self, cache_dir: str | None = None):
+        cache_dir = cache_dir or config.CACHE_DIR
         if cache_dir:
             try:
                 fastf1.Cache.enable_cache(cache_dir)
@@ -47,6 +48,7 @@ class LiveWorker:
         self._client: Optional[LiveClient] = None
         self._client_thread: Optional[threading.Thread] = None
         self._current_session: Optional[dict] = None
+        self._replay_thread: Optional[threading.Thread] = None
 
     # ── public ───────────────────────────────────────────────────────────
 
@@ -54,6 +56,20 @@ class LiveWorker:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
+
+        # Replay mode: skip the scheduler entirely
+        if config.REPLAY_FILE:
+            _log.info("REPLAY mode: %s (speed=%sx loop=%s)",
+                      config.REPLAY_FILE, config.REPLAY_SPEED, config.REPLAY_LOOP)
+            # Deferred import to avoid a circular import (replay → state → config → ...)
+            from .replay import start_replay
+            self._replay_thread = start_replay(
+                config.REPLAY_FILE,
+                speed=config.REPLAY_SPEED,
+                loop=config.REPLAY_LOOP,
+            )
+            return
+
         self._thread = threading.Thread(
             target=self._run, name="pitvisor-live-worker", daemon=True
         )
@@ -76,14 +92,18 @@ class LiveWorker:
 
             if active:
                 if self._current_session != active:
+                    # new session — begin it
                     self._current_session = active
                     self._begin_session(active)
-                # remain connected for the duration; loop checks again soon
-                time.sleep(POLL_INTERVAL)
+                elif not self._client_alive():
+                    # mid-session: client crashed or never started. Restart it.
+                    _log.warning("SignalR client not alive during active session — restarting")
+                    self._begin_session(active)
+                time.sleep(config.POLL_INTERVAL)
             else:
                 if self._current_session is not None:
                     self._end_session()
-                time.sleep(POLL_INTERVAL)
+                time.sleep(config.POLL_INTERVAL)
 
     # ── session transitions ─────────────────────────────────────────────
 
@@ -92,8 +112,6 @@ class LiveWorker:
         STATE.reset()
         STATE.mark_active(True)
 
-        # pre-populate session metadata so the frontend shows something
-        # immediately, before SessionInfo messages arrive
         STATE.set_session_info({
             "Name": active.get("session_name"),
             "Type": active.get("session_name"),
@@ -105,7 +123,6 @@ class LiveWorker:
             "StartDate": active.get("start_utc").isoformat() if active.get("start_utc") else None,
         })
 
-        # load track outline from cache (best-effort)
         try:
             geo = extract_outline(active["year"], active["round"])
             if geo:
@@ -119,10 +136,12 @@ class LiveWorker:
         except Exception:
             _log.warning("track outline extraction failed\n%s", traceback.format_exc())
 
-        # start the SignalR client on a child thread
         self._stop_client()
         try:
-            self._client = LiveClient(timeout=CLIENT_TIMEOUT)
+            self._client = LiveClient(
+                recording_dir=config.RECORDING_DIR,
+                timeout=config.CLIENT_TIMEOUT,
+            )
         except Exception:
             _log.warning("failed to construct LiveClient\n%s", traceback.format_exc())
             self._client = None
@@ -154,10 +173,15 @@ class LiveWorker:
         self._client = None
         self._client_thread = None
 
+    def _client_alive(self) -> bool:
+        return (self._client is not None
+                and self._client_thread is not None
+                and self._client_thread.is_alive())
+
     # ── schedule logic ──────────────────────────────────────────────────
 
     def _find_active_session(self, now_utc: dt.datetime) -> Optional[dict]:
-        """Scan this year's schedule for a session whose [start-15m, end+3h]
+        """Scan this year's schedule for a session whose [start-PRE, start+POST]
         window contains `now_utc`. Returns a dict describing it, or None."""
         year = now_utc.year
         try:
