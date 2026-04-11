@@ -23,6 +23,7 @@ Usage (CLI):
 import argparse
 import base64
 import datetime as dt
+import gzip
 import json
 import logging
 import os
@@ -275,9 +276,14 @@ def download(year: int, rnd, session_name: str, out_dir: str = "recordings",
 
     os.makedirs(out_dir, exist_ok=True)
     safe = re.sub(r"[^A-Za-z0-9]+", "_", f"{meta['year']}_{meta['event_name']}_{meta['session_name']}").strip("_")
-    out_path = os.path.join(out_dir, f"{safe}.jsonl")
+    # Gzip-compress the JSONL on write. JSONL with the amount of repeated
+    # keys we have (Timestamp, Entries, X, Y, Z, Status, Channels, …)
+    # compresses at ~80-85% for free, turning a ~100 MB race recording into
+    # ~18 MB. compresslevel=9 adds one-time CPU cost at write but replays
+    # forever after.
+    out_path = os.path.join(out_dir, f"{safe}.jsonl.gz")
 
-    with open(out_path, "w", encoding="utf-8") as f:
+    with gzip.open(out_path, "wt", encoding="utf-8", compresslevel=9) as f:
         header = {
             "__header__": True,
             "year": meta["year"],

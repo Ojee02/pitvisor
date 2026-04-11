@@ -24,6 +24,7 @@ from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 
 from . import config
+from .sessions import REGISTRY as REPLAY_REGISTRY
 from .state import STATE
 from .worker import WORKER
 
@@ -112,18 +113,22 @@ def create_app(cache_dir: str | None = None) -> Flask:
     @app.route("/replays", methods=["GET"])
     def list_replays():
         """List downloaded recording files in RECORDING_DIR with their
-        session metadata (pulled from each file's header line)."""
+        session metadata (pulled from each file's header line). Accepts
+        both .jsonl and .jsonl.gz (recorder switched to gzip to drop
+        recording sizes ~80%)."""
+        import gzip as _gz
         rdir = config.RECORDING_DIR
         out = []
         if os.path.isdir(rdir):
             for name in sorted(os.listdir(rdir)):
-                if not name.endswith(".jsonl"):
+                if not (name.endswith(".jsonl") or name.endswith(".jsonl.gz")):
                     continue
                 path = os.path.join(rdir, name)
                 try:
                     st = os.stat(path)
                     header = {}
-                    with open(path, "r", encoding="utf-8") as f:
+                    opener = (_gz.open if name.endswith(".gz") else open)
+                    with opener(path, "rt", encoding="utf-8") as f:
                         first = f.readline().strip()
                         if first:
                             try:
@@ -133,6 +138,7 @@ def create_app(cache_dir: str | None = None) -> Flask:
                     out.append({
                         "name": name,
                         "size": st.st_size,
+                        "compressed": name.endswith(".gz"),
                         "year": header.get("year"),
                         "event_name": header.get("event_name"),
                         "session_name": header.get("session_name"),
@@ -260,6 +266,155 @@ def create_app(cache_dir: str | None = None) -> Flask:
                 "sessions": sessions,
             })
         return jsonify({"year": year, "events": events}), 200
+
+    # ── per-client replay sessions ─────────────────────────────────────
+    #
+    # Unlike /replays/load (which switches the whole service's global
+    # worker into replay mode and affects every viewer), these endpoints
+    # create a PRIVATE replay session scoped to a single client. The
+    # session gets its own LiveState instance + feeder thread, and the
+    # client reads SSE from /replays/session/<id>/stream instead of the
+    # global /stream. Other viewers keep seeing the real live feed.
+
+    @app.route("/replays/session/start", methods=["POST"])
+    def replay_session_start():
+        try:
+            body = request.get_json(force=True) or {}
+        except Exception:
+            body = {}
+        name = body.get("name")
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        if "/" in name or ".." in name:
+            return jsonify({"error": "invalid name"}), 400
+        path = os.path.join(config.RECORDING_DIR, name)
+        if not os.path.isfile(path):
+            return jsonify({"error": "not found"}), 404
+        speed = float(body.get("speed") or 1.0)
+        loop = bool(body.get("loop") if body.get("loop") is not None else True)
+        try:
+            sess = REPLAY_REGISTRY.create(path, speed=speed, loop=loop)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+        return jsonify({
+            "session_id": sess.id,
+            "file": os.path.basename(path),
+            "speed": speed,
+            "loop": loop,
+        }), 200
+
+    @app.route("/replays/session/<sid>/stop", methods=["POST", "DELETE"])
+    def replay_session_stop(sid):
+        ok = REPLAY_REGISTRY.stop(sid)
+        if not ok:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"status": "ok"}), 200
+
+    @app.route("/replays/session/<sid>/snapshot", methods=["GET"])
+    def replay_session_snapshot(sid):
+        sess = REPLAY_REGISTRY.get(sid)
+        if not sess:
+            return jsonify({"error": "not found"}), 404
+        sess.touch()
+        return jsonify(sess.state.snapshot()), 200
+
+    @app.route("/replays/session/<sid>/stream", methods=["GET"])
+    def replay_session_stream(sid):
+        sess = REPLAY_REGISTRY.get(sid)
+        if not sess:
+            return jsonify({"error": "not found"}), 404
+
+        def gen():
+            last_ping = time.time()
+            last_push = 0.0
+            yield ": connected\n\n"
+            while True:
+                current = REPLAY_REGISTRY.get(sid)
+                if current is None:
+                    yield "event: closed\ndata: {}\n\n"
+                    return
+                current.touch()
+                now = time.time()
+                if now - last_push >= STREAM_INTERVAL:
+                    snap = current.state.snapshot()
+                    yield f"event: snapshot\ndata: {json.dumps(snap, default=str)}\n\n"
+                    last_push = now
+                if now - last_ping >= KEEPALIVE_INTERVAL:
+                    yield ": keepalive\n\n"
+                    last_ping = now
+                time.sleep(0.25)
+
+        return Response(
+            gen(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.route("/replays/session/<sid>/telemetry/stream", methods=["GET"])
+    def replay_session_telemetry_stream(sid):
+        sess = REPLAY_REGISTRY.get(sid)
+        if not sess:
+            return jsonify({"error": "not found"}), 404
+        drivers_arg = request.args.get("drivers", "").strip()
+        if not drivers_arg:
+            return jsonify({"error": "drivers query param required"}), 400
+        requested = [s.strip().upper() for s in drivers_arg.split(",") if s.strip()]
+
+        def _resolve():
+            current = REPLAY_REGISTRY.get(sid)
+            if current is None:
+                return [], None
+            snap = current.state.snapshot()
+            by_tla = {d.get("tla"): d.get("number") for d in snap["drivers"] if d.get("tla")}
+            nums: list[str] = []
+            for r in requested:
+                if r.isdigit():
+                    nums.append(r)
+                elif r in by_tla:
+                    nums.append(by_tla[r])
+            return nums, current
+
+        def gen():
+            last_seen: dict[str, int] = {}
+            last_ping = time.time()
+            yield ": connected\n\n"
+            while True:
+                nums, current = _resolve()
+                if current is None:
+                    yield "event: closed\ndata: {}\n\n"
+                    return
+                current.touch()
+                tel = current.state.telemetry_since(nums, last_seen)
+                for num, bundle in tel.items():
+                    last_seen[num] = bundle.get("seq", 0)
+                if any(t.get("samples") for t in tel.values()):
+                    snap = current.state.snapshot()
+                    cards = {d["number"]: d for d in snap["drivers"] if d["number"] in nums}
+                    payload = {"telemetry": tel, "drivers": cards, "ts": time.time()}
+                    yield f"event: telemetry\ndata: {json.dumps(payload, default=str)}\n\n"
+                now = time.time()
+                if now - last_ping >= KEEPALIVE_INTERVAL:
+                    yield ": keepalive\n\n"
+                    last_ping = now
+                time.sleep(TEL_INTERVAL)
+
+        return Response(
+            gen(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.route("/replays/sessions", methods=["GET"])
+    def replay_session_list():
+        return jsonify({"sessions": REPLAY_REGISTRY.list()}), 200
 
     # ── SSE streams ─────────────────────────────────────────────────────
 

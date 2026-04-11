@@ -25,6 +25,7 @@ Env-var integration happens in live.worker: if PITVISOR_LIVE_REPLAY is set,
 the worker bypasses the scheduler and calls start_replay() instead.
 """
 import argparse
+import gzip
 import json
 import logging
 import threading
@@ -37,10 +38,19 @@ from .state import STATE
 _log = logging.getLogger("pitvisor.live.replay")
 
 
+def _open_recording(path: str):
+    """Open a recording for text reading. Transparently handles both
+    gzip-compressed files (.jsonl.gz) and plain .jsonl files so older
+    recordings still work after the recorder started writing gzip."""
+    if path.endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8")
+    return open(path, "r", encoding="utf-8")
+
+
 def _load(path: str) -> tuple[dict, list[dict]]:
     header: dict = {}
     records: list[dict] = []
-    with open(path, "r", encoding="utf-8") as f:
+    with _open_recording(path) as f:
         for i, line in enumerate(f):
             line = line.strip()
             if not line:
@@ -57,14 +67,18 @@ def _load(path: str) -> tuple[dict, list[dict]]:
     return header, records
 
 
-def _prime_session(header: dict):
+def _prime_session(header: dict, state=None):
     """Populate session metadata and track outline before replay starts, so
-    the frontend has something to show before the first SessionInfo message."""
+    the frontend has something to show before the first SessionInfo message.
+
+    `state` is the LiveState instance to prime. Defaults to the global
+    STATE for backward compatibility (boot-time env-var replay)."""
     from .track import extract_outline
 
-    STATE.reset()
-    STATE.mark_active(True)
-    STATE.set_session_info({
+    target = state if state is not None else STATE
+    target.reset()
+    target.mark_active(True)
+    target.set_session_info({
         "Name": header.get("session_name") or "Replay",
         "Type": header.get("session_name") or "Replay",
         "Meeting": {
@@ -81,7 +95,7 @@ def _prime_session(header: dict):
         try:
             geo = extract_outline(int(year), int(rnd))
             if geo:
-                STATE.set_track_geometry(
+                target.set_track_geometry(
                     rotation=geo["rotation"],
                     outline=geo["outline"],
                     corners=geo["corners"],
@@ -126,7 +140,13 @@ def _find_seek_offset(records: list[dict]) -> tuple[int, float]:
     return 0, 0.0
 
 
-def _feed(records: list[dict], speed: float, loop: bool, stop_evt: threading.Event):
+def _feed(records: list[dict], speed: float, loop: bool, stop_evt: threading.Event, state=None):
+    # Bind the replay thread's parse context to the target state (defaults
+    # to global STATE for boot-time env-var replay; per-client replay
+    # sessions pass their own LiveState instance).
+    target = state if state is not None else STATE
+    parse.bind_state(target)
+
     seek_index, seek_t = _find_seek_offset(records)
     if seek_index > 0:
         _log.info(
@@ -165,7 +185,7 @@ def _feed(records: list[dict], speed: float, loop: bool, stop_evt: threading.Eve
                         step = min(sleep_s, 0.2)
                         time.sleep(step)
                         sleep_s -= step
-            STATE.set_elapsed(rec["t_sec"] - seek_t)
+            target.set_elapsed(rec["t_sec"] - seek_t)
             try:
                 parse.dispatch(rec["topic"], rec["payload"])
             except Exception:
@@ -173,13 +193,18 @@ def _feed(records: list[dict], speed: float, loop: bool, stop_evt: threading.Eve
 
         _log.info("replay timeline complete")
         if not loop:
-            STATE.mark_active(False)
+            target.mark_active(False)
             return
         _log.info("looping replay")
 
 
-def start_replay(path: str, speed: float = 10.0, loop: bool = False) -> threading.Thread:
+def start_replay(path: str, speed: float = 10.0, loop: bool = False, state=None) -> threading.Thread:
     """Start a background replay thread. Returns the Thread (daemon=True).
+
+    `state` is the LiveState instance the replay should write into. Omit
+    to use the global STATE (boot-time env-var replay). Per-client
+    replay sessions pass their own LiveState so each client's replay
+    is isolated from everyone else's and from the global live feed.
 
     Raises FileNotFoundError if `path` doesn't exist.
     """
@@ -189,12 +214,13 @@ def start_replay(path: str, speed: float = 10.0, loop: bool = False) -> threadin
     _log.info("replay loaded: %s (%d records, %.0f sec)",
               header.get("event_name"), len(records), records[-1]["t_sec"])
 
-    _prime_session(header)
+    _prime_session(header, state=state)
 
     stop_evt = threading.Event()
     t = threading.Thread(
         target=_feed,
         args=(records, speed, loop, stop_evt),
+        kwargs={"state": state},
         name="pitvisor-replay",
         daemon=True,
     )

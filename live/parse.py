@@ -17,11 +17,31 @@ Channel IDs for CarData:
 import base64
 import datetime as dt
 import json
+import threading
 import time
 import zlib
 from typing import Any
 
-from .state import STATE
+from .state import STATE, LiveState
+
+
+# Thread-local state context. Live-mode SignalR dispatches run on the
+# live client thread and write to the module-level STATE singleton (the
+# default). Per-client replay feeder threads set this to their own
+# LiveState instance so each replay session is isolated. current_state()
+# reads the active context; parsers call it instead of referencing STATE
+# directly so they can be reused across live and per-client replay modes.
+_ctx = threading.local()
+
+
+def current_state() -> LiveState:
+    return getattr(_ctx, "state", None) or STATE
+
+
+def bind_state(state: LiveState):
+    """Bind the current thread to write into `state`. Call this at the top
+    of a replay feeder thread before dispatching records."""
+    _ctx.state = state
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────
@@ -94,38 +114,38 @@ def _time_to_seconds(s: str | None) -> float | None:
 def on_session_info(payload: Any):
     info = _merge_dict_stream(payload)
     if info:
-        STATE.set_session_info(info)
+        current_state().set_session_info(info)
 
 
 def on_session_status(payload: Any):
     d = _merge_dict_stream(payload)
     status = d.get("Status")
     if status:
-        STATE.set_session_status(status)
+        current_state().set_session_status(status)
 
 
 def on_track_status(payload: Any):
     d = _merge_dict_stream(payload)
     status = str(d.get("Status", "1"))
     message = d.get("Message", "")
-    STATE.set_track_status(status, message)
+    current_state().set_track_status(status, message)
 
 
 def on_lap_count(payload: Any):
     d = _merge_dict_stream(payload)
-    STATE.set_lap_count(d.get("CurrentLap"), d.get("TotalLaps"))
+    current_state().set_lap_count(d.get("CurrentLap"), d.get("TotalLaps"))
 
 
 def on_extrapolated_clock(payload: Any):
     d = _merge_dict_stream(payload)
-    STATE.set_clock(d.get("Remaining"))
+    current_state().set_clock(d.get("Remaining"))
 
 
 def on_weather(payload: Any):
     d = _merge_dict_stream(payload)
     if not d:
         return
-    STATE.set_weather({
+    current_state().set_weather({
         "air_temp": _float(d.get("AirTemp")),
         "track_temp": _float(d.get("TrackTemp")),
         "humidity": _float(d.get("Humidity")),
@@ -144,7 +164,7 @@ def on_race_control(payload: Any):
         msgs = list(msgs.values())
     if not isinstance(msgs, list):
         return
-    STATE.append_race_control(msgs)
+    current_state().append_race_control(msgs)
 
 
 def on_driver_list(payload: Any):
@@ -156,7 +176,7 @@ def on_driver_list(payload: Any):
             continue
         team_colour = info.get("TeamColour")
         color = f"#{team_colour}" if team_colour else None
-        STATE.upsert_driver(num, {
+        current_state().upsert_driver(num, {
             "number": str(info.get("RacingNumber") or num),
             "tla": info.get("Tla"),
             "full_name": info.get("FullName") or (
@@ -236,7 +256,7 @@ def on_timing_data(payload: Any):
         if "Status" in info:
             patch["timing_status"] = info["Status"]
 
-        STATE.update_driver_timing(num, patch)
+        current_state().update_driver_timing(num, patch)
 
 
 def on_timing_app_data(payload: Any):
@@ -256,14 +276,14 @@ def on_timing_app_data(payload: Any):
                 stints_list = list(stints)
             if stints_list:
                 last = stints_list[-1] if isinstance(stints_list[-1], dict) else {}
-                STATE.update_driver_timing(num, {
+                current_state().update_driver_timing(num, {
                     "tire_compound": last.get("Compound"),
                     "tire_age": last.get("TotalLaps") or last.get("TyreAge"),
                     "tire_new": last.get("New"),
                     "stints": stints_list,
                 })
         if "GridPos" in info:
-            STATE.update_driver_timing(num, {"grid_pos": info["GridPos"]})
+            current_state().update_driver_timing(num, {"grid_pos": info["GridPos"]})
 
 
 def on_timing_stats(payload: Any):
@@ -274,7 +294,7 @@ def on_timing_stats(payload: Any):
             continue
         pb = info.get("PersonalBestLapTime")
         if isinstance(pb, dict) and pb.get("Value"):
-            STATE.update_driver_timing(num, {"pb_lap": pb["Value"]})
+            current_state().update_driver_timing(num, {"pb_lap": pb["Value"]})
 
 
 def on_position_z(payload: Any):
@@ -307,7 +327,7 @@ def on_position_z(payload: Any):
             y = p.get("Y")
             if x is None or y is None:
                 continue
-            STATE.append_driver_position_sample(
+            current_state().append_driver_position_sample(
                 str(num), t_ms, float(x), float(y), p.get("Status"),
             )
 
@@ -342,7 +362,7 @@ def on_car_data_z(payload: Any):
             sample = {k: v for k, v in sample.items() if v is not None}
             if sample:
                 sample.setdefault("t", utc or time.time())
-                STATE.append_driver_telemetry(str(num), sample)
+                current_state().append_driver_telemetry(str(num), sample)
 
 
 # ─── type coercion ──────────────────────────────────────────────────────
