@@ -1,0 +1,222 @@
+"""Thread-safe in-memory state store for live timing.
+
+The SignalR client thread mutates this; HTTP/SSE handler threads read from it.
+All access is guarded by a single RLock. Readers call snapshot() to get a
+deep-copied dict they can safely serialize.
+
+Telemetry is kept as a rolling per-driver buffer (~60s at the native ~3Hz rate
+we receive from CarData.z). Position is the very last sample only; the SSE
+stream sends driver (x, y) coordinates at its own cadence.
+"""
+import copy
+import threading
+import time
+from collections import deque
+from typing import Any
+
+# keep at most this many telemetry samples per driver (~60s at 3 Hz)
+TEL_BUFFER_LEN = 180
+
+
+class LiveState:
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._tel: dict[str, deque] = {}          # driver number -> deque of samples
+        self._tel_seq: dict[str, int] = {}        # driver number -> monotonic seq
+        self.reset()
+
+    # ── lifecycle ────────────────────────────────────────────────────────
+
+    def reset(self):
+        """Clear all state. Called on session start."""
+        with self._lock:
+            self.session = {
+                "active": False,
+                "name": None,
+                "type": None,
+                "round": None,
+                "year": None,
+                "meeting_key": None,
+                "status": None,        # Started | Aborted | Finished | Finalised | Inactive
+                "lap": None,
+                "total_laps": None,
+                "clock_remaining": None,
+                "track_rotation": None,
+                "track_outline": None,  # list of [x, y] pairs
+                "corners": None,        # list of {number, x, y}
+                "updated_at": None,
+            }
+            self.track_status = {"status": "1", "message": "AllClear"}
+            self.weather = {}
+            self.race_control: list[dict] = []
+            self.drivers: dict[str, dict] = {}
+            self._tel.clear()
+            self._tel_seq.clear()
+
+    def mark_active(self, active: bool):
+        with self._lock:
+            self.session["active"] = active
+            self.session["updated_at"] = time.time()
+
+    # ── session-level setters ────────────────────────────────────────────
+
+    def set_session_info(self, info: dict):
+        with self._lock:
+            meeting = info.get("Meeting") or {}
+            self.session.update({
+                "name": meeting.get("OfficialName") or info.get("Name"),
+                "type": info.get("Type") or info.get("Name"),
+                "round": meeting.get("Number"),
+                "year": None,
+                "meeting_key": info.get("Key") or meeting.get("Key"),
+                "updated_at": time.time(),
+            })
+            start = info.get("StartDate")
+            if isinstance(start, str) and len(start) >= 4:
+                try:
+                    self.session["year"] = int(start[:4])
+                except ValueError:
+                    pass
+
+    def set_session_status(self, status: str):
+        with self._lock:
+            self.session["status"] = status
+            self.session["updated_at"] = time.time()
+
+    def set_lap_count(self, current: int | None, total: int | None):
+        with self._lock:
+            if current is not None:
+                self.session["lap"] = current
+            if total is not None:
+                self.session["total_laps"] = total
+            self.session["updated_at"] = time.time()
+
+    def set_clock(self, remaining: str | None):
+        with self._lock:
+            if remaining is not None:
+                self.session["clock_remaining"] = remaining
+
+    def set_track_status(self, status: str, message: str):
+        with self._lock:
+            self.track_status = {"status": status, "message": message}
+
+    def set_weather(self, w: dict):
+        with self._lock:
+            self.weather = w
+
+    def set_track_geometry(self, rotation: float | None, outline: list | None, corners: list | None):
+        with self._lock:
+            if rotation is not None:
+                self.session["track_rotation"] = rotation
+            if outline is not None:
+                self.session["track_outline"] = outline
+            if corners is not None:
+                self.session["corners"] = corners
+
+    def append_race_control(self, messages: list[dict]):
+        with self._lock:
+            for m in messages:
+                if m not in self.race_control:
+                    self.race_control.append(m)
+            # keep latest 50
+            self.race_control = self.race_control[-50:]
+
+    # ── driver-level setters ─────────────────────────────────────────────
+
+    def upsert_driver(self, number: str, patch: dict):
+        with self._lock:
+            cur = self.drivers.setdefault(number, {"number": number})
+            cur.update({k: v for k, v in patch.items() if v is not None})
+
+    def update_driver_timing(self, number: str, timing: dict):
+        with self._lock:
+            cur = self.drivers.setdefault(number, {"number": number})
+            for k, v in timing.items():
+                if v is None:
+                    continue
+                cur[k] = v
+
+    def update_driver_position(self, number: str, x: float, y: float, status: str | None = None):
+        with self._lock:
+            cur = self.drivers.setdefault(number, {"number": number})
+            cur["x"] = x
+            cur["y"] = y
+            if status is not None:
+                cur["pos_status"] = status
+
+    def append_driver_telemetry(self, number: str, sample: dict):
+        """sample: {t, speed, rpm, gear, throttle, brake, drs}. Also mirrors
+        the latest values onto the driver card for quick reads."""
+        with self._lock:
+            buf = self._tel.get(number)
+            if buf is None:
+                buf = deque(maxlen=TEL_BUFFER_LEN)
+                self._tel[number] = buf
+            buf.append(sample)
+            self._tel_seq[number] = self._tel_seq.get(number, 0) + 1
+
+            cur = self.drivers.setdefault(number, {"number": number})
+            for k in ("speed", "rpm", "gear", "throttle", "brake", "drs"):
+                if k in sample:
+                    cur[k] = sample[k]
+
+    # ── readers ──────────────────────────────────────────────────────────
+
+    def snapshot(self) -> dict:
+        """Return a deep-copied, JSON-safe state snapshot for SSE clients.
+        Excludes per-driver telemetry buffers (use telemetry() for those)."""
+        with self._lock:
+            drivers = []
+            for num, d in self.drivers.items():
+                drivers.append(copy.deepcopy(d))
+            # sort by position when available, then by number
+            drivers.sort(key=lambda x: (x.get("position") or 99, int(x.get("number") or 99)))
+            return {
+                "session": copy.deepcopy(self.session),
+                "track_status": dict(self.track_status),
+                "weather": copy.deepcopy(self.weather),
+                "race_control": copy.deepcopy(self.race_control[-15:]),
+                "drivers": drivers,
+                "ts": time.time(),
+            }
+
+    def telemetry(self, numbers: list[str]) -> dict:
+        """Return the full rolling telemetry buffer for the given drivers.
+
+        Shape: {driver_number: {seq, samples: [{t, speed, rpm, gear, throttle, brake, drs}, ...]}}
+        """
+        out: dict = {}
+        with self._lock:
+            for n in numbers:
+                buf = self._tel.get(n)
+                if buf is None:
+                    continue
+                out[n] = {
+                    "seq": self._tel_seq.get(n, 0),
+                    "samples": list(buf),
+                }
+            return out
+
+    def telemetry_since(self, numbers: list[str], seqs: dict[str, int]) -> dict:
+        """Like telemetry() but only returns samples newer than the caller's
+        last-seen sequence number per driver, to minimize SSE payload."""
+        out: dict = {}
+        with self._lock:
+            for n in numbers:
+                buf = self._tel.get(n)
+                if buf is None:
+                    continue
+                cur_seq = self._tel_seq.get(n, 0)
+                last = seqs.get(n, 0)
+                # deque is FIFO; newest samples are at the end. Approximate:
+                # send (cur_seq - last) newest samples, capped at buffer length.
+                delta = max(0, min(len(buf), cur_seq - last))
+                if delta == 0:
+                    out[n] = {"seq": cur_seq, "samples": []}
+                else:
+                    out[n] = {"seq": cur_seq, "samples": list(buf)[-delta:]}
+            return out
+
+
+# module-level singleton
+STATE = LiveState()
