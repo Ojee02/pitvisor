@@ -15,6 +15,7 @@ Channel IDs for CarData:
     45 → DRS code (>=10 means on)
 """
 import base64
+import datetime as dt
 import json
 import time
 import zlib
@@ -40,6 +41,39 @@ def _merge_dict_stream(payload: Any) -> dict:
     """F1 sometimes sends `{_kf: true, ...}` full snapshots and sometimes
     sparse deltas. Either way it's a dict — this is a passthrough guard."""
     return payload if isinstance(payload, dict) else {}
+
+
+def _iso_to_ms(ts: Any) -> int | None:
+    """Convert an ISO 8601 timestamp string (with or without trailing 'Z',
+    with or without fractional seconds) to milliseconds since the Unix
+    epoch. Returns None if the input is malformed. F1 uses these on every
+    Position.z / CarData.z sample and they're the only per-sample clock
+    we have that's consistent across messages."""
+    if not isinstance(ts, str) or not ts:
+        return None
+    try:
+        s = ts
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        # Python's fromisoformat only accepts up to 6-digit fractional
+        # seconds; F1 timestamps have 7. Truncate to 6.
+        if "." in s:
+            head, tail = s.split(".", 1)
+            # tail looks like "2531331+00:00" — split frac from tz suffix
+            if "+" in tail:
+                frac, tz = tail.split("+", 1)
+                tz = "+" + tz
+            elif "-" in tail:
+                frac, tz = tail.split("-", 1)
+                tz = "-" + tz
+            else:
+                frac, tz = tail, ""
+            frac = frac[:6]
+            s = f"{head}.{frac}{tz}"
+        d = dt.datetime.fromisoformat(s)
+        return int(d.timestamp() * 1000)
+    except Exception:
+        return None
 
 
 def _time_to_seconds(s: str | None) -> float | None:
@@ -247,24 +281,35 @@ def on_position_z(payload: Any):
     """Position.z: zlib-wrapped positions for every car over a short window.
     Format after decode:
         {Position: [{Timestamp, Entries: {<num>: {X, Y, Z, Status}}}]}
-    We only keep the latest sample per driver (intermediate samples are
-    resent rapidly anyway)."""
+
+    Each Position.z message contains MULTIPLE timestamped samples, not a
+    single snapshot. We push every sample into each driver's rolling
+    position buffer so the frontend has enough data to interpolate smooth
+    continuous motion — keeping only the latest would make the cars
+    appear to stop and jump between Position.z message arrivals."""
     data = _decompress_z(payload) if isinstance(payload, str) else _merge_dict_stream(payload)
     if not data:
         return
     positions = data.get("Position") or []
     if not positions:
         return
-    latest = positions[-1]
-    entries = latest.get("Entries") or {}
-    for num, p in entries.items():
-        if not isinstance(p, dict):
+    for sample in positions:
+        if not isinstance(sample, dict):
             continue
-        x = p.get("X")
-        y = p.get("Y")
-        if x is None or y is None:
+        t_ms = _iso_to_ms(sample.get("Timestamp"))
+        if t_ms is None:
             continue
-        STATE.update_driver_position(str(num), float(x), float(y), p.get("Status"))
+        entries = sample.get("Entries") or {}
+        for num, p in entries.items():
+            if not isinstance(p, dict):
+                continue
+            x = p.get("X")
+            y = p.get("Y")
+            if x is None or y is None:
+                continue
+            STATE.append_driver_position_sample(
+                str(num), t_ms, float(x), float(y), p.get("Status"),
+            )
 
 
 def on_car_data_z(payload: Any):

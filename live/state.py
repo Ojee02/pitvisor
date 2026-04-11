@@ -19,6 +19,10 @@ from . import config
 _REPLAY_ACTIVE = bool(config.REPLAY_FILE)
 
 TEL_BUFFER_LEN = config.TEL_BUFFER_LEN
+# ~30 samples ≈ 10 seconds of Position.z history at 3 Hz. The frontend
+# only needs enough to reconstruct smooth motion between snapshot pushes
+# (plus a safety margin for packet loss / late snapshots).
+POS_BUFFER_LEN = 30
 
 
 class LiveState:
@@ -26,6 +30,7 @@ class LiveState:
         self._lock = threading.RLock()
         self._tel: dict[str, deque] = {}          # driver number -> deque of samples
         self._tel_seq: dict[str, int] = {}        # driver number -> monotonic seq
+        self._pos: dict[str, deque] = {}          # driver number -> deque of {t, x, y}
         self.reset()
 
     # ── lifecycle ────────────────────────────────────────────────────────
@@ -56,6 +61,7 @@ class LiveState:
             self.drivers: dict[str, dict] = {}
             self._tel.clear()
             self._tel_seq.clear()
+            self._pos.clear()
 
     def mark_active(self, active: bool):
         with self._lock:
@@ -156,6 +162,28 @@ class LiveState:
             if status is not None:
                 cur["pos_status"] = status
 
+    def append_driver_position_sample(self, number: str, t_ms: int, x: float, y: float, status: str | None = None):
+        """Append a timestamped position sample to the driver's rolling
+        buffer. Used by Position.z which sends multiple samples per message
+        — the frontend needs all of them to interpolate continuously
+        between snapshots. Also updates the driver card's current x/y."""
+        with self._lock:
+            buf = self._pos.get(number)
+            if buf is None:
+                buf = deque(maxlen=POS_BUFFER_LEN)
+                self._pos[number] = buf
+            # dedupe on timestamp — the backend sometimes sees the same
+            # sample replayed when Position.z messages overlap
+            if buf and buf[-1].get("t") == t_ms:
+                return
+            buf.append({"t": t_ms, "x": x, "y": y})
+
+            cur = self.drivers.setdefault(number, {"number": number})
+            cur["x"] = x
+            cur["y"] = y
+            if status is not None:
+                cur["pos_status"] = status
+
     def append_driver_telemetry(self, number: str, sample: dict):
         """sample: {t, speed, rpm, gear, throttle, brake, drs}. Also mirrors
         the latest values onto the driver card for quick reads."""
@@ -192,7 +220,15 @@ class LiveState:
 
             drivers = []
             for num, d in self.drivers.items():
-                drivers.append(copy.deepcopy(d))
+                drv = copy.deepcopy(d)
+                # Attach recent position history so the frontend can drive a
+                # smooth interpolation buffer. Bounded to POS_BUFFER_LEN
+                # samples (≈10s of history at 3Hz) so the snapshot payload
+                # stays small.
+                pbuf = self._pos.get(num)
+                if pbuf:
+                    drv["pos_history"] = list(pbuf)
+                drivers.append(drv)
             # sort by position when available, then by number
             drivers.sort(key=lambda x: (x.get("position") or 99, int(x.get("number") or 99)))
             return {
