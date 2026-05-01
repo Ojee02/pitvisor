@@ -1,17 +1,23 @@
 """Gunicorn entry point for the pitvisor live service.
 
 Run with:
-    gunicorn --workers 1 --threads 32 --worker-class gthread --preload \
+    gunicorn --workers 1 --threads 32 --worker-class gthread \
              --timeout 0 --bind 127.0.0.1:5101 live_main:app
 
 Why these flags:
     --workers 1   → exactly one SignalR connection (multiple workers = multiple
                     duplicate connections to F1's feed, which is bad).
     --threads 32  → each SSE client pins a thread; 32 is enough for our scale.
-    --preload     → import the app in the master so the worker thread only
-                    starts once per reload cycle.
     --timeout 0   → SSE responses are long-lived; we don't want gunicorn to
                     kill them on its idle timer.
+
+NO --preload: with preload, app import (and therefore WORKER.start()'s
+background scheduler thread) runs in the gunicorn master. After fork
+the workers don't inherit threads, so the master's scheduler updates a
+LiveState that the HTTP-serving worker can never see. Active flag stays
+false, no live data ever reaches /status. Letting each worker import
+the app itself keeps the scheduler thread + the HTTP handlers in the
+same process so STATE is actually shared.
 
 Replay mode (dev):
     PITVISOR_LIVE_REPLAY=recordings/2025_Singapore_Race.jsonl python live_main.py
