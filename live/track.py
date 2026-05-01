@@ -31,34 +31,62 @@ def extract_outline(year: int, round_or_name) -> Optional[dict]:
     for the given race. Coordinates are RAW device coordinates — same frame
     as live Position.z messages — so the frontend can apply the rotation
     angle once to both the outline and the moving driver dots in lockstep.
-    Downsampled to ~400 points. Returns None if cache miss."""
-    try:
-        session = fastf1.get_session(year, round_or_name, "R")
-    except Exception as exc:
-        _log.warning("extract_outline: get_session(%s, %s) failed: %s", year, round_or_name, exc)
+    Downsampled to ~400 points. Returns None if no session has lap data
+    yet.
+
+    Walks through session types in roughly reverse-completed order so
+    we still return a track outline during a session weekend where the
+    race hasn't run yet (the worker calls this on the Friday for Sprint
+    Qualifying, where 'R' has no lap data so we'd previously bail). If
+    the requested year has nothing, fall back to the previous year's
+    race at the same round — track geometry is stable year-on-year for
+    the same circuit, so it's a safe last-resort outline."""
+    session = None
+    for session_type in ("R", "Q", "SQ", "S", "FP3", "FP2", "FP1"):
+        try:
+            candidate = fastf1.get_session(year, round_or_name, session_type)
+        except Exception as exc:
+            _log.debug("extract_outline: get_session(%s, %s, %s) failed: %s",
+                       year, round_or_name, session_type, exc)
+            continue
+        try:
+            _log.info("extract_outline: loading fastf1 data for %s %s %s",
+                      year, round_or_name, session_type)
+            candidate.load(telemetry=True, laps=True, weather=False, messages=False)
+        except Exception as exc:
+            _log.debug("extract_outline: session.load(%s, %s, %s) failed: %s",
+                       year, round_or_name, session_type, exc)
+            continue
+        try:
+            lap = candidate.laps.pick_fastest()
+        except Exception:
+            lap = None
+        if lap is None:
+            continue
+        try:
+            pos = lap.get_pos_data()
+        except Exception:
+            continue
+        if pos is None or len(pos) < 10:
+            continue
+        # found a session with usable lap data
+        session = candidate
+        break
+
+    if session is None and isinstance(round_or_name, int) and year > 2018:
+        # Last resort: previous year's race at the same round number.
+        # Geometry is the same circuit, so the outline still works.
+        _log.info("extract_outline: no %s session has lap data — falling back to %s",
+                  year, year - 1)
+        return extract_outline(year - 1, round_or_name)
+
+    if session is None:
+        _log.warning("extract_outline: no session with lap data for %s %s", year, round_or_name)
         return None
 
-    try:
-        _log.info("extract_outline: loading fastf1 data for %s %s", year, round_or_name)
-        session.load(telemetry=True, laps=True, weather=False, messages=False)
-        _log.info("extract_outline: fastf1 load complete")
-    except Exception as exc:
-        _log.warning("extract_outline: session.load(%s, %s) failed: %s", year, round_or_name, exc)
-        return None
-
-    try:
-        lap = session.laps.pick_fastest()
-    except Exception:
-        return None
-    if lap is None:
-        return None
-
-    try:
-        pos = lap.get_pos_data()
-    except Exception:
-        return None
-    if pos is None or len(pos) < 10:
-        return None
+    _log.info("extract_outline: fastf1 load complete")
+    lap = session.laps.pick_fastest()
+    pos = lap.get_pos_data()
 
     try:
         ci = session.get_circuit_info()
