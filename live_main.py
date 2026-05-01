@@ -42,6 +42,19 @@ import numpy.core  # noqa: F401,E402
 import pandas  # noqa: F401,E402
 import fastf1  # noqa: F401,E402
 
+# Same lazy-import-from-worker-thread footgun as numpy.rec: idna's
+# uts46data submodule is loaded on first IDN host normalization. When
+# the FIRST caller is a worker thread (fastf1 schedule fetch on a
+# scheduler tick, or a SignalR HTTPS connection), we hit
+#   "ImportError: cannot import name 'uts46data' from partially
+#    initialized module 'idna.uts46data' (most likely due to a circular
+#    import)"
+# and every subsequent IDNA encode in that worker raises. Forcing the
+# load on the main thread here resolves the module before any worker
+# can race on it.
+import idna  # noqa: F401,E402
+import idna.uts46data  # noqa: F401,E402
+
 from live import config
 from live.server import create_app
 
