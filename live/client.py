@@ -32,14 +32,21 @@ class LiveClient(SignalRClient):
     flowing" behaviour we hit on F1's new authenticated endpoint and
     kick the subscription back to life by re-issuing Subscribe."""
 
-    # If we haven't seen a Position.z in this many seconds, re-send
-    # the Subscribe call. F1's server stops sending Position.z after
-    # ~5 min on a quiet subscription even though TimingData/CarData
-    # keep flowing; re-subscribing nudges it back.
-    POSITION_STALE_SEC = 30.0
-    # Don't re-subscribe more often than this even if Position is
-    # still stale right after a kick.
-    RESUBSCRIBE_COOLDOWN_SEC = 15.0
+    # Try a re-Subscribe after Position.z has been silent this long.
+    # F1's server stops streaming Position.z after a few minutes on the
+    # new authenticated endpoint even though TimingData/CarData keep
+    # flowing. Re-subscribing pulls down a fresh snapshot but does NOT
+    # restart the continuous stream, so we also do a full reconnect
+    # after a longer silence.
+    POSITION_STALE_SEC = 10.0
+    # Cool-down between re-Subscribe kicks so we don't spam F1.
+    RESUBSCRIBE_COOLDOWN_SEC = 8.0
+    # If Position.z is silent for this long, give up on Subscribe
+    # kicks and tear down the whole connection so the worker spawns a
+    # fresh one. Empirically the very first connection after auth gives
+    # us ~5 min of Position.z streaming; cycling the connection seems
+    # to be the only way to get more.
+    RECONNECT_AFTER_STALE_SEC = 45.0
 
     def __init__(self, recording_dir: str | None = None, timeout: int = 120):
         # always record; generate a filename per session
@@ -62,10 +69,12 @@ class LiveClient(SignalRClient):
         try:
             if isinstance(msg, CompletionMessage):
                 # initial snapshot: msg.result is {topic: payload, ...}
+                # NOTE: do NOT bump _t_last_position from a snapshot —
+                # each Subscribe kick generates one, and if we counted
+                # those as "Position.z is live" the watchdog would
+                # never escalate to a full reconnect.
                 result = getattr(msg, "result", None) or {}
                 for topic, payload in result.items():
-                    if topic == "Position.z":
-                        self._t_last_position = time.time()
                     parse.dispatch(topic, payload)
                     try:
                         self._output_file.write(
@@ -80,6 +89,8 @@ class LiveClient(SignalRClient):
                     topic = msg[0]
                     payload = msg[1]
                     if topic == "Position.z":
+                        # Only ongoing stream updates count; snapshot
+                        # arrivals are a single Subscribe response.
                         self._t_last_position = time.time()
                     parse.dispatch(topic, payload)
                 try:
@@ -109,17 +120,30 @@ class LiveClient(SignalRClient):
     # Position.z has been silent past the threshold.
 
     def _resubscribe(self):
-        """Send the Subscribe call again. Cooldown-gated so we don't
-        spam the server if F1 ignores us for a few seconds."""
+        """Send Subscribe again for Position.z only. Empirically, re-
+        Subscribing the full topic list only yields a fresh snapshot
+        (one Position.z) then silence; targeting a single topic seems
+        to be what F1's hub expects when nudging it to resume the
+        stream. Cooldown-gated so we don't spam the server."""
         now = time.time()
         if now - self._t_last_resubscribe < self.RESUBSCRIBE_COOLDOWN_SEC:
             return
         self._t_last_resubscribe = now
         try:
+            # First try: Unsubscribe then Subscribe just Position.z.
+            # If F1's hub tracks subscriptions per-topic, this is the
+            # cleanest reset path.
+            try:
+                self._connection.send(
+                    "Unsubscribe", [["Position.z"]]
+                )
+            except Exception:
+                pass
             self._connection.send(
-                "Subscribe", [self.topics], on_invocation=self._on_message
+                "Subscribe", [["Position.z"]],
+                on_invocation=self._on_message,
             )
-            _log.info("re-issued Subscribe (Position.z was stale)")
+            _log.info("re-issued Position.z Subscribe (was stale)")
         except Exception:
             _log.exception("failed to re-Subscribe")
 
@@ -133,9 +157,25 @@ class LiveClient(SignalRClient):
                 self._position_watchdog_stop.wait(2.0)
                 continue
             age = time.time() - self._t_last_position
+            if age > self.RECONNECT_AFTER_STALE_SEC:
+                # Soft-kick failed — exit the SignalR client. The worker
+                # supervisor will notice the thread died and re-Begin
+                # the session with a fresh client + fresh connection,
+                # which is the only thing we've found that reliably
+                # restarts the Position.z stream.
+                _log.warning(
+                    "Position.z silent for %.0fs — tearing down SignalR "
+                    "client to force a fresh connection",
+                    age,
+                )
+                try:
+                    self._exit()
+                except Exception:
+                    pass
+                return
             if age > self.POSITION_STALE_SEC:
                 self._resubscribe()
-            self._position_watchdog_stop.wait(5.0)
+            self._position_watchdog_stop.wait(3.0)
 
     def start(self):
         # Kick off the watchdog thread once the parent has finished
