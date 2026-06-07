@@ -32,28 +32,25 @@ class LiveClient(SignalRClient):
     flowing" behaviour we hit on F1's new authenticated endpoint and
     kick the subscription back to life by re-issuing Subscribe."""
 
-    # Try a re-Subscribe after Position.z has been silent this long.
-    # F1's server stops streaming Position.z after a few minutes on the
-    # new authenticated endpoint even though TimingData/CarData keep
-    # flowing. Re-subscribing pulls down a fresh snapshot but does NOT
-    # restart the continuous stream, so we also do a full reconnect
-    # after a longer silence.
-    POSITION_STALE_SEC = 10.0
-    # Cool-down between re-Subscribe kicks so we don't spam F1.
-    RESUBSCRIBE_COOLDOWN_SEC = 8.0
-    # If Position.z is silent for this long, give up on Subscribe
-    # kicks and tear down the whole connection so the worker spawns a
-    # fresh one. Empirically the very first connection after auth gives
-    # us ~5 min of Position.z streaming; cycling the connection seems
-    # to be the only way to get more.
-    RECONNECT_AFTER_STALE_SEC = 45.0
+    # F1 Access tier caps Position.z to a single snapshot per auth
+    # session: streaming stops after the very first 5 min of the
+    # first connection after each authentication, and re-Subscribing
+    # or reconnecting returns the same frozen snapshot timestamp
+    # forever afterwards. There is no client-side workaround — Pro
+    # or Premium is required for the continuous stream. The watchdog
+    # is kept around as a soft safety net only.
+    RECONNECT_AFTER_STALE_SEC = 300.0
 
-    def __init__(self, recording_dir: str | None = None, timeout: int = 120):
+    def __init__(self, recording_dir: str | None = None, timeout: int = 30):
         # always record; generate a filename per session
         recording_dir = recording_dir or tempfile.gettempdir()
         os.makedirs(recording_dir, exist_ok=True)
         ts = time.strftime("%Y%m%d-%H%M%S")
         filename = os.path.join(recording_dir, f"pitvisor-live-{ts}.txt")
+        # Default fastf1 timeout is 120 s; we drop it to 30 s so the
+        # parent _supervise loop exits quickly when our watchdog
+        # tears down the connection, letting the worker spawn a fresh
+        # client without a 2-minute wait.
         super().__init__(filename=filename, filemode="w", timeout=timeout)
         self.recording_path = filename
         self._t_last_position = 0.0
@@ -68,13 +65,16 @@ class LiveClient(SignalRClient):
 
         try:
             if isinstance(msg, CompletionMessage):
-                # initial snapshot: msg.result is {topic: payload, ...}
-                # NOTE: do NOT bump _t_last_position from a snapshot —
-                # each Subscribe kick generates one, and if we counted
-                # those as "Position.z is live" the watchdog would
-                # never escalate to a full reconnect.
+                # Subscribe response with a snapshot of each requested
+                # topic. On F1 Access tier this is the ONLY way we get
+                # Position.z (the server doesn't push it as a stream),
+                # so count snapshot arrivals toward the freshness
+                # timer — if snapshots stop coming the watchdog tears
+                # down the connection and the worker reconnects.
                 result = getattr(msg, "result", None) or {}
                 for topic, payload in result.items():
+                    if topic == "Position.z":
+                        self._t_last_position = time.time()
                     parse.dispatch(topic, payload)
                     try:
                         self._output_file.write(
@@ -148,21 +148,17 @@ class LiveClient(SignalRClient):
             _log.exception("failed to re-Subscribe")
 
     def _position_watchdog(self):
-        # Give the connection a moment to settle, then start checking.
+        # Sleeps quietly until Position.z hasn't arrived for a long
+        # time, then tears the connection down so the worker spawns a
+        # fresh one. With Access-tier auth this rarely fires after
+        # the initial 5 min — kept as a safety net for higher tiers
+        # where streaming might briefly hiccup.
         time.sleep(5.0)
+        if self._t_last_position == 0.0:
+            self._t_last_position = time.time()
         while not self._position_watchdog_stop.is_set():
-            if self._t_last_position == 0.0:
-                # No Position.z ever seen — wait until something else
-                # bootstraps the timer instead of spamming Subscribe.
-                self._position_watchdog_stop.wait(2.0)
-                continue
             age = time.time() - self._t_last_position
             if age > self.RECONNECT_AFTER_STALE_SEC:
-                # Soft-kick failed — exit the SignalR client. The worker
-                # supervisor will notice the thread died and re-Begin
-                # the session with a fresh client + fresh connection,
-                # which is the only thing we've found that reliably
-                # restarts the Position.z stream.
                 _log.warning(
                     "Position.z silent for %.0fs — tearing down SignalR "
                     "client to force a fresh connection",
@@ -172,10 +168,9 @@ class LiveClient(SignalRClient):
                     self._exit()
                 except Exception:
                     pass
+                self._t_last_message = 0.0
                 return
-            if age > self.POSITION_STALE_SEC:
-                self._resubscribe()
-            self._position_watchdog_stop.wait(3.0)
+            self._position_watchdog_stop.wait(5.0)
 
     def start(self):
         # Kick off the watchdog thread once the parent has finished

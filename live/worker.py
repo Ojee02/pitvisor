@@ -131,12 +131,21 @@ class LiveWorker:
     # ── internal: live loop ─────────────────────────────────────────────
 
     def _live_run(self):
+        # Schedule polling is expensive (hits fastf1's cached calendar);
+        # client-alive checks are cheap. Loop the cheap one fast so we
+        # respawn the SignalR client within seconds of a teardown.
+        last_schedule_check = 0.0
+        active = None
         while not self._live_stop.is_set():
-            try:
-                active = self._find_active_session(dt.datetime.now(dt.timezone.utc))
-            except Exception as exc:
-                _log.warning("schedule check failed: %s", exc)
-                active = None
+            now = time.time()
+            if now - last_schedule_check >= config.POLL_INTERVAL:
+                try:
+                    active = self._find_active_session(
+                        dt.datetime.now(dt.timezone.utc))
+                except Exception as exc:
+                    _log.warning("schedule check failed: %s", exc)
+                    active = None
+                last_schedule_check = now
 
             if active:
                 if self._current_session != active:
@@ -145,11 +154,14 @@ class LiveWorker:
                 elif not self._client_alive():
                     _log.warning("SignalR client not alive during active session — restarting")
                     self._begin_session(active)
-                time.sleep(config.POLL_INTERVAL)
             else:
                 if self._current_session is not None:
                     self._end_session()
-                time.sleep(config.POLL_INTERVAL)
+
+            # Fast tick — client-alive checks need to happen well within
+            # a SignalR teardown window or the map freezes for tens of
+            # seconds after every Position.z timeout.
+            self._live_stop.wait(3.0)
 
     def _begin_session(self, active: dict):
         _log.info("session active: %s", active.get("label"))

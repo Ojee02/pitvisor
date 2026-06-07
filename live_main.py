@@ -61,6 +61,14 @@ import fastf1  # noqa: F401,E402
 import idna  # noqa: F401,E402
 import idna.uts46data  # noqa: F401,E402
 
+# Crank up signalrcore + websocket logging so when Position.z stops
+# flowing we can see whether frames are arriving on the wire and our
+# dispatch dropped them, or whether F1 stopped sending. This is noisy
+# but invaluable while diagnosing the new authenticated endpoint.
+import logging as _logging  # noqa: E402
+_logging.getLogger("SignalRCoreClient").setLevel(_logging.DEBUG)
+_logging.getLogger("websocket").setLevel(_logging.WARNING)  # too noisy at DEBUG
+
 from live import config
 from live.server import create_app
 
