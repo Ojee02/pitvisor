@@ -1,10 +1,12 @@
 import numpy as np
 import datetime as dt
+from collections import OrderedDict
 from time import time
 from time import ctime
 import fastf1 as ff1
 import pathlib
 import platform
+import threading
 from pymongo import MongoClient
 import os
 from dotenv import load_dotenv
@@ -38,14 +40,77 @@ dir_path = r"" + str(pathlib.Path(__file__).parent.resolve())
 def get_path():
     return os.sep
 
+
+# ─── FastF1 session loading ────────────────────────────────────────────────
+#
+# session.load() is the single most expensive thing this app does: even with
+# a warm doc_cache a full load is ~90 s, of which ~45 s is telemetry nobody
+# asked for. Two things fix that:
+#
+#   1. Profile. Callers say what they need. Laps-only is the default shape
+#      for every standings/timing chart; only the telemetry charts ask for
+#      car data, and only positions asks for race control messages.
+#   2. A process-wide LRU keyed by session. The first analysis of a session
+#      pays for it; the next six are dict lookups. A cached session that was
+#      loaded laps-only is upgraded in place (load(laps=False, ...)) rather
+#      than rebuilt, so upgrading never repeats the 40 s timing pass.
+#
+# Loads are serialised per session so two threads can't build the same
+# session twice, and bounded by a semaphore so a burst of jobs can't open
+# six telemetry sessions at once and blow the memory ceiling.
+
+_SESSION_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()
+_SESSION_CACHE_LOCK = threading.Lock()
+_SESSION_KEY_LOCKS: dict[tuple, threading.Lock] = {}
+_SESSION_LOAD_SEMAPHORE = threading.Semaphore(int(os.environ.get("PITVISOR_SESSION_LOAD_CONCURRENCY", "2")))
+SESSION_CACHE_SIZE = int(os.environ.get("PITVISOR_SESSION_CACHE_SIZE", "4"))
+
+
+def _cache_key(yr, rc, sn):
+    try:
+        return (int(yr), str(rc), str(sn))
+    except (TypeError, ValueError):
+        return (str(yr), str(rc), str(sn))
+
+
+def _key_lock(key):
+    with _SESSION_CACHE_LOCK:
+        lock = _SESSION_KEY_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _SESSION_KEY_LOCKS[key] = lock
+        return lock
+
+
+def _session_object(yr, rc, sn, session_type, sn_resolved):
+    """Build (but do not load) the FastF1 Session for these inputs."""
+    if session_type == "1":
+        return ff1.get_testing_session(yr, 1, sn_resolved)
+    if session_type == "2":
+        return ff1.get_testing_session(yr, 2, sn_resolved)
+    return ff1.get_session(yr, rc, sn_resolved)
+
+
 # load the session
-def get_sess(yr, rc, sn):
-    
+def get_sess(yr, rc, sn, *, telemetry=True, weather=True, messages=True):
+    """Return a loaded FastF1 Session.
+
+    Defaults load everything, which is what the matplotlib functions in
+    funcs.py expect. The JSON data functions pass telemetry/weather/messages
+    explicitly to skip the ~45 s of telemetry work they don't use.
+    """
+    # Callers pass form values straight through, so year can arrive as a
+    # string. Everything below compares it against int literals
+    # (`elif yr >= 2023`), which raises TypeError on a str.
+    try:
+        yr = int(yr)
+    except (TypeError, ValueError):
+        pass
     try:
         rc = int(rc)
     except:
         pass
-    
+
     session_type = "normal"
 
     if yr == 2020:
@@ -64,28 +129,75 @@ def get_sess(yr, rc, sn):
     elif yr >= 2023:
         if "Pre-Season" in str(rc):
             session_type = "1"
-            
+
+    sn_resolved = sn
     if session_type == "1" or session_type == "2":
         if sn == "Day 1":
-            sn = 1
+            sn_resolved = 1
         elif sn == "Day 2":
-            sn = 2
+            sn_resolved = 2
         elif sn == "Day 3":
-            sn = 3
-            
-    if session_type == "normal":
-        session = ff1.get_session(yr, rc, sn)
-    elif session_type == "1":
-        session = ff1.get_testing_session(yr, 1, sn)
-    elif session_type == "2":
-        session = ff1.get_testing_session(yr, 2, sn)
-        
-    session.load()
+            sn_resolved = 3
+
+    want = (bool(telemetry), bool(weather), bool(messages))
+    key = _cache_key(yr, rc, sn)
+
+    # Fast path: already loaded with a superset of what's being asked for.
+    with _SESSION_CACHE_LOCK:
+        entry = _SESSION_CACHE.get(key)
+        if entry is not None:
+            _SESSION_CACHE.move_to_end(key)
+    if entry is not None and all(have or not w for w, have in zip(want, entry[1])):
+        return entry[0]
+
+    with _key_lock(key):
+        # Re-check inside the per-session lock — someone may have loaded it
+        # while we waited.
+        with _SESSION_CACHE_LOCK:
+            entry = _SESSION_CACHE.get(key)
+            if entry is not None:
+                _SESSION_CACHE.move_to_end(key)
+        if entry is None:
+            session = _session_object(yr, rc, sn, session_type, sn_resolved)
+            with _SESSION_LOAD_SEMAPHORE:
+                session.load(laps=True, telemetry=want[0], weather=want[1], messages=want[2])
+            have = want
+        else:
+            session, have = entry
+            missing = tuple(w and not h for w, h in zip(want, have))
+            if any(missing):
+                with _SESSION_LOAD_SEMAPHORE:
+                    # laps=False: the timing pass already ran, so this only
+                    # pays for the pieces we skipped last time.
+                    session.load(laps=False, telemetry=missing[0],
+                                 weather=missing[1], messages=missing[2])
+                have = tuple(a or b for a, b in zip(have, want))
+
+        with _SESSION_CACHE_LOCK:
+            _SESSION_CACHE[key] = (session, have)
+            _SESSION_CACHE.move_to_end(key)
+            if have[0]:
+                # A telemetry session holds car_data + position_data for the
+                # whole race — hundreds of MB. Keep at most one of those
+                # resident, or a handful of charts puts us over the memory
+                # ceiling. Laps-only sessions are a few MB each and stack.
+                for other in list(_SESSION_CACHE):
+                    if other != key and _SESSION_CACHE[other][1][0]:
+                        _SESSION_CACHE.pop(other, None)
+            while len(_SESSION_CACHE) > SESSION_CACHE_SIZE:
+                _SESSION_CACHE.popitem(last=False)
+
     try:
         fix = session.laps.pick_fastest()
     except:
         pass
     return session
+
+
+def invalidate_session_cache():
+    """Drop every cached FastF1 session (used after cache_dir changes)."""
+    with _SESSION_CACHE_LOCK:
+        _SESSION_CACHE.clear()
 
 # enable cache
 if os.path.exists(dir_path + get_path() + "doc_cache"):
@@ -136,8 +248,7 @@ def get_sessions(yr, rc):
  
 ### gets drivers of a session ###
 def get_drivers(yr, rc, sn):
-    session = get_sess(yr, rc, sn)
-    session.load()
+    session = get_sess(yr, rc, sn, telemetry=False, weather=False, messages=False)
     laps = session.laps
     ls = set(tuple(x) for x in laps[['Driver']].values.tolist())
     lis = [x[0] for x in ls]
@@ -145,8 +256,7 @@ def get_drivers(yr, rc, sn):
 
 ### gets laps of a session ###
 def get_laps(yr, rc, sn):
-    session = get_sess(yr, rc, sn)
-    session.load()
+    session = get_sess(yr, rc, sn, telemetry=False, weather=False, messages=False)
     laps = session.laps
     ls = set(tuple(x) for x in laps[['LapNumber']].values.tolist())
     lis = sorted([int(x[0]) for x in ls])
@@ -158,8 +268,7 @@ def get_laps(yr, rc, sn):
 
 ### gets distance of a session ###
 def get_distance(yr, rc, sn):
-    session = get_sess(yr, rc, sn)
-    session.load()
+    session = get_sess(yr, rc, sn, telemetry=True, weather=False, messages=False)
     laps = session.laps
     car_data = laps.pick_fastest().get_car_data().add_distance()
     maxdist = int(np.max(car_data['Distance']))

@@ -50,25 +50,6 @@ TEL_INTERVAL = _f("PITVISOR_LIVE_TEL_INTERVAL", 0.25)
 KEEPALIVE_INTERVAL = _f("PITVISOR_LIVE_KEEPALIVE_INTERVAL", 15.0)
 
 
-# ── Scheduler windows (orchestrator) ──────────────────────────────────
-
-# Minutes *before* scheduled session start to begin listening on SignalR.
-# Gives the feed time to warm up and lets the frontend show the connection.
-PRE_WINDOW_MINUTES = _i("PITVISOR_LIVE_PRE_WINDOW_MINUTES", 15)
-
-# Hours *after* scheduled session start to keep listening. Overshoot covers
-# red flags, overruns, and post-session cooldown messages.
-POST_WINDOW_HOURS = _i("PITVISOR_LIVE_POST_WINDOW_HOURS", 3)
-
-# Seconds between schedule checks when idle (outside any session window).
-POLL_INTERVAL = _i("PITVISOR_LIVE_POLL_INTERVAL", 60)
-
-# Seconds the SignalR client will wait without any message before it gives
-# up and exits. Outside the session it will simply exit and the orchestrator
-# will decide whether to restart it based on the current window.
-CLIENT_TIMEOUT = _i("PITVISOR_LIVE_CLIENT_TIMEOUT", 120)
-
-
 # ── State buffers ─────────────────────────────────────────────────────
 
 # Max telemetry samples kept in the rolling per-driver buffer. Native rate
@@ -81,7 +62,7 @@ RACE_CONTROL_KEEP = _i("PITVISOR_LIVE_RACE_CONTROL_KEEP", 50)
 
 # ── Directories ───────────────────────────────────────────────────────
 
-# Where LiveClient writes raw SignalR recordings during live sessions.
+# Where recordings are stored (downloaded from F1's archive).
 RECORDING_DIR = os.environ.get(
     "PITVISOR_LIVE_RECORDING_DIR",
     "/home/disinteg/pitvisor/backend/recordings",
@@ -94,31 +75,12 @@ CACHE_DIR = os.environ.get(
 )
 
 
-# ── Replay mode (dev) ─────────────────────────────────────────────────
+# ── Replay playback ────────────────────────────────────────────────────
 
-# Path to a recorded JSONL file. When set, the orchestrator SKIPS live
-# SignalR entirely and feeds this file through the parse pipeline instead
-# — useful for testing the UI between race weekends.
-REPLAY_FILE = os.environ.get("PITVISOR_LIVE_REPLAY")
-
-# Replay speed multiplier. 1.0 = real-time, 10 = 10x, 0 = as-fast-as-possible.
-REPLAY_SPEED = _f("PITVISOR_LIVE_REPLAY_SPEED", 10.0)
-
-# Loop the replay back to the start when it ends.
-REPLAY_LOOP = _b("PITVISOR_LIVE_REPLAY_LOOP", False)
-
-# Shared-secret token that gates the /replays/* endpoints. When set, the
-# client must pass ?key=<token> on every replay URL (query param because
-# EventSource can't add custom headers). When unset, all /replays/*
-# endpoints are open — useful for local dev, but DO NOT leave unset on
-# a publicly reachable deployment. The global live stream is never
-# gated; only replay management/consumption is.
-REPLAY_AUTH_TOKEN = os.environ.get("PITVISOR_LIVE_REPLAY_TOKEN") or None
-
-# Skip the first N seconds of the recording (session time). F1 recordings
+# Seconds to skip into the recording before playback starts. F1 recordings
 # include ~20-30 min of pre-session activity (installation laps, formation,
-# grid line-up) before the race actually starts — at 1× replay speed that
-# looks like the page is frozen. Set this to jump past it.
+# grid line-up) before the race actually starts — at 1x replay speed that
+# looks like the page is frozen.
 REPLAY_SEEK_SEC = _f("PITVISOR_LIVE_REPLAY_SEEK_SEC", 0.0)
 
 # If true, automatically skip ahead to the first record where SessionStatus
@@ -133,18 +95,10 @@ def describe() -> dict:
         "stream_interval": STREAM_INTERVAL,
         "tel_interval": TEL_INTERVAL,
         "keepalive_interval": KEEPALIVE_INTERVAL,
-        "pre_window_minutes": PRE_WINDOW_MINUTES,
-        "post_window_hours": POST_WINDOW_HOURS,
-        "poll_interval": POLL_INTERVAL,
-        "client_timeout": CLIENT_TIMEOUT,
         "tel_buffer_len": TEL_BUFFER_LEN,
         "race_control_keep": RACE_CONTROL_KEEP,
         "recording_dir": RECORDING_DIR,
         "cache_dir": CACHE_DIR,
-        "replay_file": REPLAY_FILE,
-        "replay_speed": REPLAY_SPEED,
-        "replay_loop": REPLAY_LOOP,
         "replay_seek_sec": REPLAY_SEEK_SEC,
         "replay_skip_to_start": REPLAY_SKIP_TO_START,
-        "replay_auth_enabled": REPLAY_AUTH_TOKEN is not None,
     }

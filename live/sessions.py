@@ -13,6 +13,7 @@ call `touch()` on every iteration to keep their session alive.
 import gzip
 import json
 import logging
+import os
 import secrets
 import threading
 import time
@@ -23,6 +24,12 @@ from .state import LiveState
 _log = logging.getLogger("pitvisor.live.sessions")
 
 SESSION_IDLE_TIMEOUT = 600.0  # seconds
+
+# A replay session holds its own LiveState plus the fully parsed recording
+# in memory (~800 MB per 100 MB of JSONL). The service has a hard memory
+# ceiling, so cap how many can exist at once and evict the oldest when a
+# new one would push past it.
+MAX_SESSIONS = int(os.environ.get("PITVISOR_MAX_REPLAY_SESSIONS", "3"))
 
 
 def _peek_duration(path: str) -> float:
@@ -170,7 +177,15 @@ class ReplaySessionRegistry:
         self._cleanup_started = False
 
     def create(self, file_path: str, speed: float, loop: bool) -> ReplaySession:
+        evicted: list[str] = []
         with self._lock:
+            if MAX_SESSIONS > 0 and len(self._sessions) >= MAX_SESSIONS:
+                # Evict the least-recently-touched session to make room.
+                ordered = sorted(self._sessions.values(), key=lambda s: s.last_touched)
+                for victim in ordered[:len(self._sessions) - MAX_SESSIONS + 1]:
+                    self._sessions.pop(victim.id, None)
+                    evicted.append(victim.id)
+                    victim.stop()
             sid = secrets.token_urlsafe(9)
             sess = ReplaySession(sid, file_path, speed, loop)
             sess.start()
@@ -178,7 +193,9 @@ class ReplaySessionRegistry:
             self._ensure_cleanup_locked()
             _log.info("replay session created: id=%s file=%s speed=%sx loop=%s",
                       sid, file_path, speed, loop)
-            return sess
+        for sid in evicted:
+            _log.info("replay session gc: evicted idle session %s (cap %d)", sid, MAX_SESSIONS)
+        return sess
 
     def get(self, sid: str) -> Optional[ReplaySession]:
         with self._lock:

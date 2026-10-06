@@ -16,7 +16,10 @@ from typing import Any
 
 from . import config
 
-_REPLAY_ACTIVE = bool(config.REPLAY_FILE)
+# There is no live feed any more — every state store in this process is
+# driven by a replay feeder, so elapsed_sec always comes from record t_sec
+# and must never be derived from the wall clock.
+_REPLAY_ACTIVE = True
 
 TEL_BUFFER_LEN = config.TEL_BUFFER_LEN
 # ~30 samples ≈ 10 seconds of Position.z history at 3 Hz. The frontend
@@ -67,9 +70,21 @@ class LiveState:
             self.weather = {}
             self.race_control: list[dict] = []
             self.drivers: dict[str, dict] = {}
+            self.load_stage = {"stage": "idle", "detail": None, "updated_at": time.time()}
             self._tel.clear()
             self._tel_seq.clear()
             self._pos.clear()
+
+    def set_load_stage(self, stage: str, detail: str | None = None):
+        """Report where a replay session is in its start-up sequence
+        (reading -> outline -> building -> playing) so the frontend can
+        show a real progress state instead of an apparently frozen page."""
+        with self._lock:
+            self.load_stage = {
+                "stage": stage,
+                "detail": detail,
+                "updated_at": time.time(),
+            }
 
     def mark_active(self, active: bool):
         with self._lock:
@@ -252,6 +267,7 @@ class LiveState:
                 "weather": copy.deepcopy(self.weather),
                 "race_control": copy.deepcopy(self.race_control[-15:]),
                 "drivers": drivers,
+                "load": dict(self.load_stage),
                 "ts": time.time(),
             }
 

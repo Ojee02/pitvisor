@@ -77,7 +77,7 @@ def _td_sec(td):
 
 def fastest_data(input_list):
     yr, rc, sn = input_list["year"], input_list["race"], input_list["session"]
-    session = get_sess(yr, rc, sn)
+    session = get_sess(yr, rc, sn, telemetry=False, weather=False, messages=False)
 
     drivers = pd.unique(session.laps['Driver'])
     fl = []
@@ -115,7 +115,7 @@ def fastest_data(input_list):
 
 def results_data(input_list):
     yr, rc, sn = input_list["year"], input_list["race"], input_list["session"]
-    session = get_sess(yr, rc, sn)
+    session = get_sess(yr, rc, sn, telemetry=False, weather=False, messages=False)
     res = session.results
     if res.empty:
         raise Exception("The data you are trying to access has not been loaded yet.")
@@ -205,7 +205,7 @@ def event_data(input_list):
 def laps_data(input_list):
     yr, rc, sn = input_list["year"], input_list["race"], input_list["session"]
     drivers = input_list["drivers"]
-    session = get_sess(yr, rc, sn)
+    session = get_sess(yr, rc, sn, telemetry=False, weather=False, messages=False)
 
     result = []
     for drv in drivers:
@@ -232,7 +232,7 @@ def time_data(input_list):
     yr, rc, sn = input_list["year"], input_list["race"], input_list["session"]
     drivers = input_list["drivers"]
     lap = input_list.get("lap")
-    session = get_sess(yr, rc, sn)
+    session = get_sess(yr, rc, sn, telemetry=True,  weather=False, messages=False)
 
     result = []
     for drv in drivers:
@@ -264,7 +264,7 @@ def distance_data(input_list):
     yr, rc, sn = input_list["year"], input_list["race"], input_list["session"]
     drivers = input_list["drivers"]
     lap = input_list.get("lap")
-    session = get_sess(yr, rc, sn)
+    session = get_sess(yr, rc, sn, telemetry=True,  weather=False, messages=False)
 
     result = []
     for drv in drivers:
@@ -295,7 +295,7 @@ def delta_data(input_list):
     d1, d2 = input_list.get("driver1"), input_list.get("driver2")
     lap1, lap2 = input_list.get("lap1"), input_list.get("lap2")
 
-    session = get_sess(yr, rc, sn)
+    session = get_sess(yr, rc, sn, telemetry=True,  weather=False, messages=False)
     laps = session.laps
 
     if not d1: d1 = laps.pick_fastest()['Driver']
@@ -338,7 +338,7 @@ def tel_data(input_list):
     d1, d2 = input_list.get("driver1"), input_list.get("driver2")
     lap1, lap2 = input_list.get("lap1"), input_list.get("lap2")
 
-    session = get_sess(yr, rc, sn)
+    session = get_sess(yr, rc, sn, telemetry=True,  weather=False, messages=False)
     laps = session.laps
 
     if not d1: d1 = laps.pick_fastest()['Driver']
@@ -402,7 +402,7 @@ def cornering_data(input_list):
     dist1, dist2 = input_list.get("dist1"), input_list.get("dist2")
     lap1, lap2 = input_list.get("lap1"), input_list.get("lap2")
 
-    session = get_sess(yr, rc, sn)
+    session = get_sess(yr, rc, sn, telemetry=True,  weather=False, messages=False)
     laps = session.laps
 
     if not d1: d1 = laps.pick_fastest()['Driver']
@@ -483,8 +483,7 @@ def cornering_data(input_list):
 
 def strategy_data(input_list):
     yr, rc = input_list["year"], input_list["race"]
-    race = fastf1.get_session(yr, rc, 'R')
-    race.load()
+    race = get_sess(yr, rc, 'Race', telemetry=False, weather=False, messages=False)
 
     stints = race.laps[['Driver', 'Stint', 'Compound', 'LapNumber']].groupby(
         ['Driver', 'Stint', 'Compound']).count().reset_index()
@@ -524,7 +523,7 @@ def positions_data(input_list):
     yr, rc = input_list["year"], input_list["race"]
     safety_car = input_list.get("safety_car", True)
 
-    session = get_sess(yr, rc, 'Race')
+    session = get_sess(yr, rc, 'Race', telemetry=False, weather=False, messages=True)
 
     drivers_data = []
     for drv in session.drivers:
@@ -583,7 +582,7 @@ def positions_data(input_list):
 def rt_data(input_list):
     yr, rc = input_list["year"], input_list["race"]
     drivers = input_list["drivers"]
-    session = get_sess(yr, rc, 'Race')
+    session = get_sess(yr, rc, 'Race', telemetry=False, weather=False, messages=False)
 
     pd.options.mode.chained_assignment = None
     laps = session.laps

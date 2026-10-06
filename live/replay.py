@@ -47,7 +47,7 @@ def _open_recording(path: str):
     return open(path, "r", encoding="utf-8")
 
 
-def _load(path: str) -> tuple[dict, list[dict]]:
+def _load(path: str, on_progress=None) -> tuple[dict, list[dict]]:
     header: dict = {}
     records: list[dict] = []
     with _open_recording(path) as f:
@@ -64,15 +64,37 @@ def _load(path: str) -> tuple[dict, list[dict]]:
                 continue
             if "t_sec" in obj and "topic" in obj:
                 records.append(obj)
+            if on_progress is not None and len(records) % 20000 == 0 and records:
+                on_progress(len(records))
     return header, records
 
 
-def _prime_session(header: dict, state=None):
-    """Populate session metadata and track outline before replay starts, so
-    the frontend has something to show before the first SessionInfo message.
+def _read_header(path: str) -> dict:
+    """Read only the first line of a recording — its header. Costs a single
+    line instead of a full 112 MB parse, which is what lets the track
+    outline extraction start in parallel with _load()."""
+    try:
+        with _open_recording(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                if obj.get("__header__"):
+                    return obj
+                return {}
+    except Exception as exc:
+        _log.warning("header peek failed for %s: %s", path, exc)
+    return {}
+
+
+def _prime_session(header: dict, state=None, geometry: dict | None = None):
+    """Populate session metadata — and, unless `geometry` is supplied,
+    the track outline — before replay starts, so the frontend has
+    something to show before the first SessionInfo message.
 
     `state` is the LiveState instance to prime. Defaults to the global
-    STATE for backward compatibility (boot-time env-var replay)."""
+    STATE for backward compatibility."""
     from .track import extract_outline
 
     target = state if state is not None else STATE
@@ -89,20 +111,23 @@ def _prime_session(header: dict, state=None):
         "StartDate": f"{header.get('year')}-01-01",
     })
 
-    year = header.get("year")
-    rnd = header.get("round")
-    if year and rnd:
-        try:
-            geo = extract_outline(int(year), int(rnd))
-            if geo:
-                target.set_track_geometry(
-                    rotation=geo["rotation"],
-                    outline=geo["outline"],
-                    corners=geo["corners"],
-                )
-                _log.info("replay track outline loaded (%d points)", len(geo["outline"]))
-        except Exception as exc:
-            _log.warning("replay outline extraction failed: %s", exc)
+    if geometry is None:
+        year = header.get("year")
+        rnd = header.get("round")
+        if year and rnd:
+            try:
+                geometry = extract_outline(int(year), int(rnd))
+            except Exception as exc:
+                _log.warning("replay outline extraction failed: %s", exc)
+                geometry = None
+    if geometry:
+        target.set_track_geometry(
+            rotation=geometry.get("rotation"),
+            outline=geometry.get("outline"),
+            corners=geometry.get("corners"),
+        )
+        _log.info("replay track outline applied (%d points)",
+                  len(geometry.get("outline") or []))
 
 
 def _find_seek_offset(records: list[dict]) -> tuple[int, float]:
@@ -169,15 +194,54 @@ def _feed(
     parse.bind_state(target)
     _log.info("feeder thread started: state_id=%s path=%s", id(target), path)
 
-    # Load + prime here, on the feeder thread, so the caller never blocks.
+    # Kick the track-outline extraction off FIRST, in its own thread. It is
+    # a full FastF1 session load when cold (~40 s) and shares no work with
+    # parsing the recording, so running the two together roughly halves the
+    # time to first frame. The outline is memoised on disk, so this is a
+    # file read on every subsequent start.
+    target.set_load_stage("outline", "extracting track outline")
+    peeked_header: dict = {}
     try:
-        header, records = _load(path)
+        peeked_header = _read_header(path)
+    except Exception:
+        _log.exception("header peek failed for %s", path)
+    geo_box: dict = {}
+    year, rnd = peeked_header.get("year"), peeked_header.get("round")
+
+    def _outline_job():
+        if not (year and rnd):
+            return
+        try:
+            from .track import extract_outline
+            geo = extract_outline(int(year), int(rnd))
+            if geo:
+                geo_box["geo"] = geo
+        except Exception:
+            _log.exception("outline extraction job failed")
+
+    outline_thread = threading.Thread(
+        target=_outline_job, name="pitvisor-outline", daemon=True
+    )
+    outline_thread.start()
+
+    # Load + prime here, on the feeder thread, so the caller never blocks.
+    target.set_load_stage("reading", "reading recording")
+    try:
+        header, records = _load(
+            path,
+            on_progress=lambda n: target.set_load_stage(
+                "reading", f"reading recording ({n} records)"
+            ),
+        )
     except Exception:
         _log.exception("replay load failed for %s", path)
         target.mark_active(False)
         return
+    if not header and peeked_header:
+        header = peeked_header
     if not records:
         _log.warning("replay %s has no records", path)
+        target.set_load_stage("error", "recording contains no records")
         target.mark_active(False)
         return
     duration = float(records[-1]["t_sec"])
@@ -188,12 +252,20 @@ def _feed(
             on_loaded(duration)
         except Exception:
             pass
+
+    outline_thread.join(timeout=600)
+    geometry = geo_box.get("geo")
+    if geometry is None:
+        # The parallel job failed or timed out — fall back to doing it here
+        # (prime will extract when handed None), but say so in the UI.
+        target.set_load_stage("outline", "extracting track outline")
     _log.info("feeder: calling _prime_session")
     try:
-        _prime_session(header, state=target)
+        _prime_session(header, state=target, geometry=geometry)
     except Exception:
         _log.exception("_prime_session failed")
     _log.info("feeder: _prime_session returned, entering feed loop")
+    target.set_load_stage("building", "building session state")
 
     default_seek_index, default_seek_t = _find_seek_offset(records)
     if default_seek_index > 0:
@@ -235,8 +307,9 @@ def _feed(
                 # seek target doesn't linger visually.
                 target.reset()
                 target.mark_active(True)
+                target.set_load_stage("building", "seeking")
                 try:
-                    _prime_session(header, state=target)
+                    _prime_session(header, state=target, geometry=geometry)
                 except Exception:
                     _log.exception("_prime_session failed during seek")
                 # Fast-forward from index 0 up to the new target so
@@ -281,11 +354,14 @@ def _feed(
                     _log.exception("dispatch failed on %s", rec.get("topic"))
                 target.set_elapsed(rec["t_sec"])
                 i += 1
+                if i % 2000 == 0:
+                    target.set_load_stage("building", f"seeking ({i}/{seek_index})")
                 continue
 
             if wall_start is None:
                 wall_start = time.time()
                 start_t = rec["t_sec"]
+                target.set_load_stage("playing", None)
                 _log.info("replay: real-time playback starting at t=%.0fs", start_t)
 
             spd = _speed()

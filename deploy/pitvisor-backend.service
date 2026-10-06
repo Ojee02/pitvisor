@@ -7,11 +7,15 @@ User=disinteg
 Group=disinteg
 WorkingDirectory=/home/disinteg/pitvisor/backend
 Environment="PATH=/home/disinteg/pitvisor/venv/bin"
-ExecStart=/home/disinteg/pitvisor/venv/bin/gunicorn --workers 1 --threads 4 --timeout 900 --bind 127.0.0.1:5100 main:app
+Environment="PITVISOR_JOB_DIR=/home/disinteg/pitvisor/job_cache"
+Environment="PITVISOR_JOB_IMAGE_DIR=/home/disinteg/pitvisor/job_images"
+ExecStart=/home/disinteg/pitvisor/venv/bin/gunicorn --workers 1 --threads 16 --worker-class gthread --timeout 900 --bind 127.0.0.1:5100 main:app
 Restart=always
 RestartSec=5
 
-# Resource limits to coexist with MC server
+# Resource limits to coexist with MC server and the replay service.
+# One worker on purpose: the FastF1 session LRU and the job executor are
+# process-local, and a telemetry session alone can approach 1 GB.
 CPUQuota=60%
 MemoryMax=4G
 MemoryHigh=3G

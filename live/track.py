@@ -1,22 +1,32 @@
 """Track outline extraction.
 
-For the live track map we need a pre-computed SVG-friendly outline of the
-current circuit. We pull it from the local FastF1 cache: pick the most recent
+For the track map we need a pre-computed SVG-friendly outline of the
+circuit. We pull it from the local FastF1 cache: pick the most recent
 cached session for this circuit, load the fastest lap's position data, and
 return the rotated (X, Y) polyline.
 
-This runs once per session on the live worker, at the moment a session
-becomes active. It does NOT hit the network — only reads cached parquet/pkl.
+Geometry for a given (year, round) never changes, so every outline is also
+written to a tiny JSON file next to the recordings. The first extraction
+costs a full FastF1 session load (~40 s); every later one is a file read.
 """
+import json
 import logging
 import math
 import os
+import threading
 from typing import Optional
 
 import fastf1
 import pandas as pd
 
 _log = logging.getLogger("pitvisor.live.track")
+
+OUTLINE_CACHE_DIR = os.environ.get(
+    "PITVISOR_TRACK_CACHE_DIR",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "track_cache"),
+)
+_OUTLINE_LOCKS: dict[str, threading.Lock] = {}
+_OUTLINE_LOCKS_GUARD = threading.Lock()
 
 
 def _downsample(points: list, max_points: int = 400) -> list:
@@ -26,21 +36,92 @@ def _downsample(points: list, max_points: int = 400) -> list:
     return points[::step]
 
 
-def extract_outline(year: int, round_or_name) -> Optional[dict]:
+def _cache_key(year, round_or_name) -> Optional[str]:
+    try:
+        return f"{int(year)}_{int(round_or_name)}.json"
+    except (TypeError, ValueError):
+        if isinstance(round_or_name, str):
+            safe = "".join(c if c.isalnum() else "-" for c in round_or_name)
+            return f"{int(year)}_{safe}.json"
+        return None
+
+
+def _read_cache(key: str) -> Optional[dict]:
+    path = os.path.join(OUTLINE_CACHE_DIR, key)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get("outline"):
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def _write_cache(key: str, data: dict) -> None:
+    try:
+        os.makedirs(OUTLINE_CACHE_DIR, exist_ok=True)
+        path = os.path.join(OUTLINE_CACHE_DIR, key)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except Exception as exc:
+        _log.debug("outline cache write failed for %s: %s", key, exc)
+
+
+def _lock_for(key: str) -> threading.Lock:
+    with _OUTLINE_LOCKS_GUARD:
+        lock = _OUTLINE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _OUTLINE_LOCKS[key] = lock
+        return lock
+
+
+def extract_outline(year: int, round_or_name, use_cache: bool = True) -> Optional[dict]:
     """Return {outline: [[x, y], ...], corners: [{number, x, y}], rotation}
     for the given race. Coordinates are RAW device coordinates — same frame
-    as live Position.z messages — so the frontend can apply the rotation
+    as Position.z messages — so the frontend can apply the rotation
     angle once to both the outline and the moving driver dots in lockstep.
     Downsampled to ~400 points. Returns None if no session has lap data
     yet.
 
+    Results are memoised on disk keyed by (year, round) so only the very
+    first extraction for a circuit pays for a FastF1 session load. A
+    per-key lock stops two replay sessions starting at once from both
+    doing the 40 s load.
+
     Walks through session types in roughly reverse-completed order so
     we still return a track outline during a session weekend where the
-    race hasn't run yet (the worker calls this on the Friday for Sprint
-    Qualifying, where 'R' has no lap data so we'd previously bail). If
-    the requested year has nothing, fall back to the previous year's
-    race at the same round — track geometry is stable year-on-year for
-    the same circuit, so it's a safe last-resort outline."""
+    race hasn't run yet (this is called on a Friday for Sprint Qualifying,
+    where 'R' has no lap data so we'd previously bail). If the requested
+    year has nothing, fall back to the previous year's race at the same
+    round — track geometry is stable year-on-year for the same circuit,
+    so it's a safe last-resort outline."""
+    key = _cache_key(year, round_or_name)
+    if not (use_cache and key):
+        return _extract_outline_uncached(year, round_or_name)
+
+    cached = _read_cache(key)
+    if cached is not None:
+        _log.info("extract_outline: cache hit %s", key)
+        return cached
+
+    # One extraction per (year, round) at a time: the second caller blocks
+    # here and then finds the cache the first one just wrote, instead of
+    # stacking an identical FastF1 load behind it.
+    with _lock_for(key):
+        cached = _read_cache(key)
+        if cached is not None:
+            return cached
+        result = _extract_outline_uncached(year, round_or_name)
+        if result is not None:
+            _write_cache(key, result)
+        return result
+
+
+def _extract_outline_uncached(year: int, round_or_name) -> Optional[dict]:
     session = None
     for session_type in ("R", "Q", "SQ", "S", "FP3", "FP2", "FP1"):
         try:

@@ -1,13 +1,16 @@
-"""Live timing module for pitvisor.
+"""Replay module for pitvisor.
 
-Connects to F1's SignalR live timing feed, parses messages, maintains in-memory
-session state, and exposes an SSE API for the frontend to consume.
+Feeds recorded F1 live-timing JSONL files through the parse pipeline and
+exposes an SSE API for the frontend to consume. The SignalR live feed this
+module originally wrapped no longer works, so the client/worker layers are
+gone; only the recording, parsing, state and replay playback remain.
 
 Subpackages:
-    state   — thread-safe state store
-    parse   — per-topic message decoders
-    client  — SignalR subclass that routes messages into the state store
-    worker  — schedule-aware orchestrator (starts client during sessions)
-    server  — Flask blueprint with /status, /snapshot, /stream, /telemetry
-    track   — track outline extraction from the cache
+    state     - thread-safe state store
+    parse     - per-topic message decoders
+    replay    - feeder thread that paces a recording through parse
+    sessions  - per-client replay session registry
+    recorder  - downloader for F1's static archive + recording CLI
+    server    - Flask app with /replays/*
+    track     - track outline extraction + on-disk memoisation
 """

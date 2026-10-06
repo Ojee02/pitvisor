@@ -199,7 +199,6 @@ def fastest_func(input_list, datetime):
     sn = input_list["session"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     mpl_lock.acquire()
 
@@ -266,7 +265,6 @@ def results_func(input_list, datetime):
     sn = input_list["session"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     msg = session.results
     
@@ -361,7 +359,6 @@ def laps_func(input_list, datetime):
     drivers = input_list["drivers"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     
     mpl_lock.acquire()
@@ -418,7 +415,6 @@ def time_func(input_list, datetime):
     lap = input_list["lap"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     
     mpl_lock.acquire()
@@ -491,7 +487,6 @@ def distance_func(input_list, datetime):
     lap = input_list["lap"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     
     mpl_lock.acquire()
@@ -564,7 +559,6 @@ def delta_func(input_list, datetime):
     lap2 = input_list["lap2"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     
     mpl_lock.acquire()
@@ -651,7 +645,6 @@ def gear_func(input_list, datetime):
     lap = input_list["lap"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     
     mpl_lock.acquire()
@@ -740,7 +733,6 @@ def speed_func(input_list, datetime):
     colormap = mpl.cm.plasma
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     
     mpl_lock.acquire()
@@ -834,7 +826,6 @@ def tel_func(input_list, datetime):
     lap2 = input_list["lap2"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     
     mpl_lock.acquire()
@@ -1028,7 +1019,6 @@ def cornering_func(input_list, datetime):
     lap2 = input_list["lap2"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     
     mpl_lock.acquire()
@@ -1269,7 +1259,6 @@ def tires_func(input_list, datetime):
     sl = input_list["lap"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     mpl_lock.acquire()
 
@@ -1535,7 +1524,6 @@ def sectors_func(input_list, datetime):
     lap2 = input_list["lap2"]
 
     session = get_sess(yr, rc, sn)
-    session.load()
 
     
     mpl_lock.acquire()
@@ -1709,7 +1697,6 @@ def rt_func(input_list, datetime):
     drivers = input_list["drivers"]
 
     session = get_sess(yr, rc, 'Race')
-    session.load()
 
     
     mpl_lock.acquire()
