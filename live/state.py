@@ -22,10 +22,14 @@ from . import config
 _REPLAY_ACTIVE = True
 
 TEL_BUFFER_LEN = config.TEL_BUFFER_LEN
-# ~30 samples ≈ 10 seconds of Position.z history at 3 Hz. The frontend
-# only needs enough to reconstruct smooth motion between snapshot pushes
-# (plus a safety margin for packet loss / late snapshots).
-POS_BUFFER_LEN = 30
+# ~30 samples was 10 seconds of history — five times what the track map
+# can use, and it was the bulk of a 57 KB snapshot. The map renders
+# RENDER_LAG_MS (700ms) behind the newest sample and extrapolates a
+# little past it, so ~4 seconds of depth (12 samples at F1's ~3Hz) is
+# already generous. Halving the payload is what lets the SSE loop hold
+# its 0.25s cadence instead of slipping to 0.5s with jitter — every
+# slipped snapshot is a frame where the map has to freeze.
+POS_BUFFER_LEN = 12
 
 
 class LiveState:

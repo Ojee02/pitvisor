@@ -33,13 +33,13 @@ def _b(key: str, default: bool) -> bool:
 
 # ── SSE pacing ────────────────────────────────────────────────────────
 
-# Seconds between full snapshot pushes on /live/stream. 0.33 ≈ 3 Hz which
-# matches the native Position.z rate so the track map dots glide smoothly
-# without squashing multiple position updates into a single frame. At replay
+# Seconds between full snapshot pushes on /live/stream. 0.25 = 4 Hz —
+# fast enough that the map's 700ms render lag always has a newer sample
+# to interpolate toward. At replay
 # speeds above 1× this still compresses movement (replay_speed × 0.33 of
 # session time per frame) — bump it lower during high-speed replay if you
 # want silky motion.
-STREAM_INTERVAL = _f("PITVISOR_LIVE_STREAM_INTERVAL", 0.33)
+STREAM_INTERVAL = _f("PITVISOR_LIVE_STREAM_INTERVAL", 0.25)
 
 # Seconds between telemetry pushes on /live/telemetry/stream.
 # 0.25 = 4 Hz — matches the native ~3 Hz rate of CarData with a small buffer.
