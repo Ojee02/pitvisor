@@ -280,7 +280,37 @@ def get_distance(yr, rc, sn):
 
 ### db ###
 
+# A year's race list is a cache of FastF1's schedule, and calendars move
+# mid-season. Reconciling on read keeps the dropdown honest without ever
+# putting a network call on the request path: the first time this process
+# asks about a year it kicks a background merge, and the next request
+# picks up whatever FastF1 has that Mongo did not.
+_races_reconciled = set()
+_races_reconcile_lock = threading.Lock()
+
+
+def kick_races_reconcile(yr):
+    try:
+        key = int(yr)
+    except (TypeError, ValueError):
+        return
+    with _races_reconcile_lock:
+        if key in _races_reconciled:
+            return
+        _races_reconciled.add(key)
+
+    def _run():
+        try:
+            from update import update_races   # deferred: update.py imports this module
+            update_races(key)
+        except Exception as exc:
+            print("races reconcile failed for %s: %s" % (key, exc))
+
+    threading.Thread(target=_run, daemon=True, name="races-reconcile").start()
+
+
 def get_races_from_db(func, yr):
+    kick_races_reconcile(yr)
     collection = db["races"]
     doc = collection.find_one({"year": int(yr)})
     if doc is None:
@@ -291,6 +321,26 @@ def get_races_from_db(func, yr):
         if race not in res:
             res.append(race)
     return res
+
+
+def get_race_options(yr):
+    """Race dropdown options: the FastF1 event name plus where it is held.
+
+    The name is what every analysis passes back to fastf1.get_event(), so
+    it must stay exactly as FastF1 spells it. The venue exists because a
+    relocated event is otherwise invisible — in 2026 the Bahrain Grand
+    Prix ran at Sepang and there was no way to find it by looking for
+    Malaysia.
+    """
+    kick_races_reconcile(yr)
+    names = get_races_from_db(None, yr)
+    venues = {}
+    try:
+        doc = db["races"].find_one({"year": int(yr)}) or {}
+        venues = doc.get("venues") or {}
+    except Exception:
+        pass
+    return [{"name": n, "location": venues.get(n)} for n in names]
 
 def get_sessions_from_db(yr, rc):
     # Always return full session list from FastF1

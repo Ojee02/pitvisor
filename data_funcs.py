@@ -162,10 +162,15 @@ def schedule_data(input_list):
 
     events = []
     for _, row in schedule.iterrows():
+        loc = row.get("Location")
         events.append({
             "name": row['EventName'],
             "date": str(row['EventDate'])[:10],
             "format": str(row['EventFormat']).replace("_", " ").title(),
+            # Where it actually runs. In 2026 the Bahrain Grand Prix was
+            # held at Sepang; without this the row is indistinguishable
+            # from a normal Bahrain race and looks like a missing event.
+            "location": "" if loc is None or str(loc) == "nan" else str(loc),
         })
 
     return {"type": "schedule", "title": f"{yr} Schedule", "events": events}

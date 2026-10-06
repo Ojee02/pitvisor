@@ -310,9 +310,11 @@ async def inputs_helper(request):
             except:
                 res = []
         elif input_type == "races":
+            # name + venue, so a relocated event is findable by where it ran.
             try:
-                res = get_races_from_db(input_data["func"], input_data["year"])
+                res = get_race_options(input_data["year"])
             except:
+                print(traceback.format_exc())
                 res = []
         elif input_type == "sessions":
             try:

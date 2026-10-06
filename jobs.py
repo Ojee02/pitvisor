@@ -57,8 +57,27 @@ def ttl_for(input_list) -> int:
     return TTL_PAST if year < now else TTL_CURRENT
 
 
+def _generation() -> str:
+    """Stamped into every job id from the mtime of the code that produces
+    results. A deploy that changes chart output must not keep serving the
+    previous build's cached payload — in 2026 the schedule chart gained a
+    venue column and kept returning the pre-column result from cache for
+    hours. A deploy that only touches infra leaves the stamp alone, so
+    warm results survive it."""
+    try:
+        parts = [str(os.path.getmtime(os.path.join(BASE, f)))
+                 for f in ("data_funcs.py", "funcs.py")]
+        return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:8]
+    except OSError:
+        return "0"
+
+
+GENERATION = _generation()
+
+
 def make_id(kind: str, payload: dict) -> str:
-    blob = json.dumps({"k": kind, "p": payload}, sort_keys=True, default=str)
+    blob = json.dumps({"k": kind, "g": GENERATION, "p": payload},
+                      sort_keys=True, default=str)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 
 

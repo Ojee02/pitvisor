@@ -593,18 +593,69 @@ def update_to(i):
 
 ### updates mongo with races of a given year ###
 def update_races(yr):
-    collection_name = "races"
-    collection = db[collection_name]
-    # if doc exists with yr not exists, create doc
-    if collection.count_documents({"year": int(yr)}) == 0:
+    """Reconcile Mongo's race list for `yr` with FastF1's schedule.
+
+    This used to be insert-if-missing: the document was written once and
+    never touched again. A calendar that changes mid-season therefore
+    never reached the dropdown. In 2026 the Bahrain Grand Prix was
+    cancelled in the Middle East and re-hosted at Sepang on 26 July —
+    FastF1 carried "Bahrain Grand Prix · Kuala Lumpur" from then on, but
+    Mongo had been written in February without it, so the race was in the
+    schedule chart and in FastF1 and nowhere a visitor could pick it.
+
+    Now every call merges FastF1's list into Mongo: new events go in at
+    the position FastF1 gives them, events FastF1 has dropped stay put
+    (they may still have cached session data behind them), and the venue
+    map is refreshed so the dropdown can say where an event actually is.
+    """
+    collection = db["races"]
+    try:
         schedule = ff1.get_event_schedule(yr)
-        df = schedule[['EventName']]
-        df = df.values
-        df = df.tolist()
-        races = []
-        for i in df:
-            races.append(i[0])
-        collection.insert_one({"year": yr, 'races': races})
+        if schedule is None or schedule.empty:
+            return
+        fresh = [str(n) for n in schedule["EventName"].tolist()]
+        venues = {}
+        for _, row in schedule.iterrows():
+            name = str(row.get("EventName"))
+            loc = row.get("Location")
+            if name and loc is not None and str(loc) and str(loc) != "nan":
+                venues[name] = str(loc)
+    except Exception:
+        print(traceback.format_exc())
+        return
+    if not fresh:
+        return
+
+    doc = collection.find_one({"year": int(yr)})
+    if doc is None:
+        collection.insert_one({"year": int(yr), "races": fresh, "venues": venues})
+        return
+
+    existing = list(doc.get("races") or [])
+    merged = list(existing)
+    added = []
+    for i, name in enumerate(fresh):
+        if name in merged:
+            continue
+        # Anchor on the previous event FastF1 lists that we already have,
+        # so a mid-season insertion lands in calendar order rather than
+        # at the end where nobody would find it.
+        anchor = next((n for n in reversed(fresh[:i]) if n in merged), None)
+        idx = merged.index(anchor) + 1 if anchor is not None else 0
+        merged.insert(idx, name)
+        added.append((name, anchor))
+
+    update = {"$set": {"venues": venues}}
+    if added:
+        update["$set"]["races"] = merged
+    try:
+        collection.update_one({"year": int(yr)}, update)
+    except Exception:
+        print(traceback.format_exc())
+        return
+    for name, anchor in added:
+        print(f"update_races({yr}): added {name!r} after {anchor!r}")
+
 
 ### updates mongo with data of all sessions of a given year and returns a list of all updated sessions ###
 def update_data(yr):
